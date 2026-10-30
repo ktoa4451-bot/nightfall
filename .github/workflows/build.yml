@@ -1,122 +1,42 @@
-name: Build from ZIP
+
+name: Nightfall Client Build
 
 on:
-  push:
-    branches: [ main, master ]
   workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
 
 permissions:
-  contents: write
-
-env:
-  ZIP_PATH: nightfall.zip
-  BUILD_DIR: ${{ github.workspace }}/_project
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Verify ZIP exists
-        run: |
-          if [ ! -f "$ZIP_PATH" ]; then
-            echo "::error::ZIP not found at $ZIP_PATH"
-            ls -la
-            exit 1
-          fi
-          echo "Found: $ZIP_PATH"
-          unzip -l "$ZIP_PATH" | head -n 40
-
-      - name: Set up JDK 21
+      - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
+          cache: gradle
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.12'
+      - name: Make Gradle executable
+        run: chmod +x gradlew
 
-      - name: Extract ZIP
-        run: |
-          mkdir -p "$BUILD_DIR"
-          unzip -q "$ZIP_PATH" -d "$BUILD_DIR"
-          echo "=== Extracted top level ==="
-          ls -la "$BUILD_DIR"
+      - name: Build Nightfall Client
+        run: ./gradlew --no-daemon clean build
 
-          # Если внутри ZIP есть единственная корневая папка — поднимаем её наверх
-          ENTRIES=$(ls -1 "$BUILD_DIR" | wc -l)
-          FIRST=$(ls -1 "$BUILD_DIR" | head -n 1)
-          if [ "$ENTRIES" -eq 1 ] && [ -d "$BUILD_DIR/$FIRST" ]; then
-            echo "Single root folder detected: $FIRST — flattening"
-            shopt -s dotglob
-            mv "$BUILD_DIR/$FIRST"/* "$BUILD_DIR"/
-            shopt -u dotglob
-            rmdir "$BUILD_DIR/$FIRST"
-          fi
-
-          echo "=== Project root ==="
-          ls -la "$BUILD_DIR"
-
-      - name: Validate build files
-        run: |
-          cd "$BUILD_DIR"
-          for f in build.gradle settings.gradle gradle.properties; do
-            if [ ! -f "$f" ]; then
-              echo "::error::Missing $f in project root"
-              ls -la
-              exit 1
-            fi
-            echo "OK: $f"
-          done
-
-      - name: Generate Gradle wrapper if missing
-        run: |
-          cd "$BUILD_DIR"
-          if [ ! -f ./gradlew ]; then
-            echo "gradlew not found — generating wrapper"
-            gradle wrapper --gradle-version 8.12
-          fi
-          chmod +x ./gradlew
-          ./gradlew --version
-
-      - name: Build
-        run: |
-          cd "$BUILD_DIR"
-          ./gradlew build --no-daemon --stacktrace
-
-      - name: Collect JAR
-        if: success()
-        run: |
-          cd "$BUILD_DIR"
-          echo "=== build/libs ==="
-          ls -la build/libs
-          mkdir -p "$GITHUB_WORKSPACE/out"
-          find build/libs -maxdepth 1 -name '*.jar' \
-            ! -name '*-sources.jar' \
-            ! -name '*-dev.jar' \
-            -exec cp {} "$GITHUB_WORKSPACE/out/" \;
-          echo "=== Collected ==="
-          ls -la "$GITHUB_WORKSPACE/out"
-
-      - name: Upload JAR
-        if: success()
+      - name: Upload JAR artifact
         uses: actions/upload-artifact@v4
         with:
-          name: nightfall-jar
-          path: out/*.jar
+          name: Nightfall-Client
+          path: build/libs/*.jar
           if-no-files-found: error
-
-      - name: Upload build reports on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-reports
-          path: |
-            _project/build/reports/**
-            _project/build/tmp/**
-          if-no-files-found: ignore
+          retention-days: 14
+          
