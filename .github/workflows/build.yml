@@ -4,7 +4,8 @@ name: Nightfall Client Build
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -14,7 +15,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Set up Java 21
         uses: actions/setup-java@v5
@@ -22,12 +24,16 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Extract project ZIP
+      - name: Extract Nightfall ZIP
         shell: bash
         run: |
           set -eo pipefail
 
+          echo "=== Repository ==="
+          ls -la
+
           ZIP_FILE="$(find . -maxdepth 4 -type f -iname '*.zip' -print -quit)"
+
           if [ -z "$ZIP_FILE" ]; then
             echo "ERROR: ZIP not found"
             exit 1
@@ -36,52 +42,44 @@ jobs:
           mkdir -p extracted
           unzip -oq "$ZIP_FILE" -d extracted
 
-          echo "=== Gradle files found ==="
-          find extracted -type f \( \
-            -name 'build.gradle' -o \
-            -name 'build.gradle.kts' -o \
-            -name 'settings.gradle' -o \
-            -name 'settings.gradle.kts' -o \
-            -name 'gradle.properties' \
-          \) -print
-
           BUILD_FILE="$(find extracted -type f \( \
-            -name 'build.gradle' -o \
-            -name 'build.gradle.kts' \
+            -name build.gradle -o \
+            -name build.gradle.kts \
           \) -print -quit)"
 
-          SETTINGS_FILE="$(find extracted -type f \( \
-            -name 'settings.gradle' -o \
-            -name 'settings.gradle.kts' \
-          \) -print -quit)"
-
-          if [ -z "$BUILD_FILE" ] || [ -z "$SETTINGS_FILE" ]; then
-            echo "ERROR: build.gradle or settings.gradle is missing"
+          if [ -z "$BUILD_FILE" ]; then
+            echo "ERROR: build.gradle not found inside ZIP"
+            find extracted -maxdepth 5 -type f -print
             exit 1
           fi
 
           PROJECT_DIR="$(dirname "$BUILD_FILE")"
-          SETTINGS_DIR="$(dirname "$SETTINGS_FILE")"
 
-          if [ "$PROJECT_DIR" != "$SETTINGS_DIR" ]; then
-            echo "ERROR: Gradle files are in different directories"
-            exit 1
-          fi
-
+          echo "Project directory: $PROJECT_DIR"
           cp -a "$PROJECT_DIR"/. .
 
-          echo "=== Root files ==="
+          if [ ! -f settings.gradle ] && \
+             [ ! -f settings.gradle.kts ]; then
+            echo "Creating settings.gradle"
+            printf "rootProject.name = 'nightfall'\n" > settings.gradle
+          fi
+
+          echo "=== Gradle files ==="
           ls -la
+          test -d src || {
+            echo "ERROR: src directory is missing"
+            exit 1
+          }
 
       - name: Install Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.12'
 
-      - name: Build
+      - name: Build Nightfall
         run: gradle --no-daemon clean build
 
-      - name: Upload JAR
+      - name: Upload JAR artifact
         uses: actions/upload-artifact@v4
         with:
           name: Nightfall-Client
