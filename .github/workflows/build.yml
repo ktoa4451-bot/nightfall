@@ -25,34 +25,33 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - name: Setup Gradle
+      - name: Setup Gradle 8.14.3
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.14.3"
 
-      - name: Extract ZIP
+      - name: Extract Nightfall ZIP
         shell: bash
         run: |
           set -euo pipefail
+
           test -f nightfall.zip
           mkdir -p source
           unzip -oq nightfall.zip -d source
 
           BUILD_FILE="$(find source -type f \
-            \( -name build.gradle -o -name build.gradle.kts \) \
-            -print -quit)"
+            -name build.gradle -print -quit)"
 
           if [ -z "$BUILD_FILE" ]; then
             echo "ERROR: build.gradle not found in ZIP"
-            find source -maxdepth 4 -type f | head -100
             exit 1
           fi
 
           PROJECT_DIR="$(dirname "$BUILD_FILE")"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Project directory: $PROJECT_DIR"
+          echo "Project: $PROJECT_DIR"
 
-      - name: Configure Loom
+      - name: Fix Fabric Loom configuration
         shell: bash
         run: |
           set -euo pipefail
@@ -62,23 +61,54 @@ jobs:
           from pathlib import Path
           import re
 
-          for p in [Path("build.gradle"), Path("build.gradle.kts")]:
-              if not p.exists():
-                  continue
+          build = Path("build.gradle")
+          props = Path("gradle.properties")
 
-              s = p.read_text(encoding="utf-8")
-              s = s.replace("1.11-SNAPSHOT", "1.11.8")
-              s = re.sub(
-                  r"(net\.fabricmc\.fabric-loom-remap['\"]\s*\)?\s*version\s*['\"])[^'\"]+",
-                  r"\g<1>1.11.8",
-                  s
+          if not build.exists():
+              raise SystemExit("ERROR: build.gradle missing")
+
+          text = build.read_text(encoding="utf-8")
+
+          # Loom 1.11 uses the legacy plugin ID.
+          text = text.replace(
+              "net.fabricmc.fabric-loom-remap",
+              "fabric-loom"
+          )
+
+          # Use a fixed version instead of an unresolved property.
+          pattern = (
+              r"id\s+['\"]fabric-loom['\"]"
+              r"\s+version\s+['\"][^'\"]+['\"]"
+          )
+
+          text, count = re.subn(
+              pattern,
+              "id 'fabric-loom' version '1.11.8'",
+              text,
+              count=1
+          )
+
+          if count != 1:
+              raise SystemExit(
+                  "ERROR: Could not update Loom plugin declaration"
               )
-              p.write_text(s, encoding="utf-8")
-              print(f"Updated {p}")
 
-          if not Path("settings.gradle").exists() and \
-             not Path("settings.gradle.kts").exists():
-              Path("settings.gradle").write_text(
+          build.write_text(text, encoding="utf-8")
+
+          if props.exists():
+              ptext = props.read_text(encoding="utf-8")
+              ptext = re.sub(
+                  r"(?m)^loom_version=.*$",
+                  "loom_version=1.11.8",
+                  ptext
+              )
+              props.write_text(ptext, encoding="utf-8")
+
+          settings = Path("settings.gradle")
+          settings_kts = Path("settings.gradle.kts")
+
+          if not settings.exists() and not settings_kts.exists():
+              settings.write_text(
                   "pluginManagement {\n"
                   "    repositories {\n"
                   "        maven { url = "
@@ -90,25 +120,25 @@ jobs:
                   "rootProject.name = 'Nightfall'\n",
                   encoding="utf-8"
               )
+
+          print("Fabric Loom configuration updated.")
+          print(build.read_text(encoding="utf-8")[:500])
           PY
 
-          echo "===== BUILD FILE ====="
-          ls -la
-          sed -n '1,80p' build.gradle 2>/dev/null || true
-
-      - name: Build JAR
+      - name: Build mod JAR
         shell: bash
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
+
           gradle --no-daemon clean build --stacktrace
 
-      - name: Upload JAR
+      - name: Upload Nightfall JAR
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: Nightfall-JAR
-          path: source/**/build/libs/*.jar
+          path: ${{ env.PROJECT_DIR }}/build/libs/*.jar
           if-no-files-found: error
           retention-days: 14
 
@@ -116,7 +146,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: Nightfall-diagnostics
+          name: Nightfall-build-logs
           path: |
             source/**/build/reports/**
             source/**/build/tmp/**
