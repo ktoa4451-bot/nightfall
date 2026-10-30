@@ -3,16 +3,13 @@ name: Build from ZIP
 on:
   push:
     branches: [ main, master ]
-    paths:
-      - 'source/**.zip'
-      - '.github/workflows/build.yml'
   workflow_dispatch:
 
 permissions:
   contents: write
 
 env:
-  ZIP_PATH: source/nightfall.zip
+  ZIP_PATH: nightfall.zip
   BUILD_DIR: ${{ github.workspace }}/_project
 
 jobs:
@@ -27,7 +24,7 @@ jobs:
         run: |
           if [ ! -f "$ZIP_PATH" ]; then
             echo "::error::ZIP not found at $ZIP_PATH"
-            ls -la source/ || true
+            ls -la
             exit 1
           fi
           echo "Found: $ZIP_PATH"
@@ -99,7 +96,6 @@ jobs:
           echo "=== build/libs ==="
           ls -la build/libs
           mkdir -p "$GITHUB_WORKSPACE/out"
-          # только основной jar, без -sources и -dev
           find build/libs -maxdepth 1 -name '*.jar' \
             ! -name '*-sources.jar' \
             ! -name '*-dev.jar' \
