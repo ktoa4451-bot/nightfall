@@ -1,15 +1,9 @@
+name: Build Nightfall Client
 
-name: Nightfall Client Build
-
-'on':
-  workflow_dispatch:
+on:
   push:
-    branches:
-      - main
-      - master
-
-permissions:
-  contents: read
+    branches: [ "main", "master" ]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -19,45 +13,96 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Java 21
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
 
-      - name: Setup Gradle
+      # Loom 1.11 требует Gradle 8.14+
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.14'
 
-      - name: Extract Nightfall ZIP
+      - name: Extract ZIP
         run: |
-          mkdir -p extracted
-          unzip -q nightfall.zip -d extracted
-
-      - name: Find Gradle project
-        id: project
-        shell: bash
-        run: |
-          BUILD_FILE=$(find extracted -type f \
-            \( -name build.gradle -o -name build.gradle.kts \) \
-            | head -n 1)
-
-          if [ -z "$BUILD_FILE" ]; then
-            echo "ERROR: Gradle build file not found in nightfall.zip"
+          if [ ! -f "nightfall.zip" ]; then
+            echo "::error::Файл nightfall.zip не найден в корне репозитория!"
             exit 1
           fi
+          
+          mkdir -p build_dir
+          unzip -q nightfall.zip -d build_dir
+          
+          # Если внутри архива есть одна корневая папка, поднимаем её содержимое на уровень выше
+          COUNT=$(ls -1 build_dir | wc -l)
+          FIRST=$(ls -1 build_dir | head -n 1)
+          if [ "$COUNT" -eq 1 ] && [ -d "build_dir/$FIRST" ]; then
+            echo "Обнаружена корневая папка '$FIRST', перемещаем содержимое..."
+            shopt -s dotglob
+            mv build_dir/$FIRST/* build_dir/
+            shopt -u dotglob
+            rmdir build_dir/$FIRST
+          fi
+          
+          echo "Содержимое build_dir:"
+          ls -la build_dir
 
-          echo "dir=$(dirname "$BUILD_FILE")" >> "$GITHUB_OUTPUT"
+      # Принудительно кладем settings.gradle в корень, чтобы Gradle его увидел
+      - name: Force settings.gradle to root
+        run: |
+          cd build_dir
+          FOUND=$(find . -name "settings.gradle" -type f | head -n 1)
+          if [ -z "$FOUND" ]; then
+            echo "::error::settings.gradle отсутствует в архиве!"
+            exit 1
+          fi
+          cp "$FOUND" ./settings.gradle
+          echo "=== settings.gradle в корне ==="
+          cat settings.gradle
 
-      - name: Build Nightfall
-        working-directory: ${{ steps.project.outputs.dir }}
-        run: gradle --no-daemon clean build
+      - name: Generate Gradle Wrapper
+        run: |
+          cd build_dir
+          if [ ! -f "./gradlew" ]; then
+            echo "gradlew не найден, генерируем..."
+            gradle wrapper --gradle-version 8.14
+          fi
+          chmod +x ./gradlew
+          ./gradlew --version
+
+      - name: Build with Gradle
+        run: |
+          cd build_dir
+          ./gradlew build --no-daemon --stacktrace
+
+      - name: Collect JAR
+        if: success()
+        run: |
+          cd build_dir
+          mkdir -p ../output
+          find build/libs -maxdepth 1 -name '*.jar' \
+            ! -name '*-sources.jar' \
+            ! -name '*-dev.jar' \
+            -exec cp {} ../output/ \;
+          echo "Скопировано в output:"
+          ls -la ../output
 
       - name: Upload JAR
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: Nightfall-Client
-          path: extracted/**/build/libs/*.jar
+          name: nightfall-jar
+          path: output/*.jar
           if-no-files-found: error
-          
+
+      - name: Upload build reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-reports
+          path: |
+            build_dir/build/reports/**
+            build_dir/build/tmp/**
+          if-no-files-found: ignore
