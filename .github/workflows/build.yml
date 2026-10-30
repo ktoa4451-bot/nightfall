@@ -1,12 +1,12 @@
 
-name: Build Nightfall
+name: Nightfall Build v2
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - 'nightfall.zip'
-      - '.github/workflows/build.yml'
+      - "nightfall.zip"
+      - ".github/workflows/build.yml"
 
 permissions:
   contents: read
@@ -23,65 +23,141 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: "21"
+          cache: gradle
 
-      - name: Setup Gradle 8.14.3
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.14.3'
+          gradle-version: "8.14.3"
 
-      - name: Extract project
+      - name: Extract Nightfall
         shell: bash
         run: |
           set -euo pipefail
-          test -f nightfall.zip
+
+          test -f nightfall.zip || {
+            echo "ERROR: nightfall.zip not found in repository"
+            exit 1
+          }
+
           mkdir -p source
           unzip -oq nightfall.zip -d source
 
-          BUILD_FILE="$(find source -type f -name build.gradle -print -quit)"
+          BUILD_FILE="$(find source -type f \
+            -name build.gradle -print -quit)"
+
           if [ -z "$BUILD_FILE" ]; then
-            echo "ERROR: build.gradle not found in ZIP"
+            BUILD_FILE="$(find source -type f \
+              -name build.gradle.kts -print -quit)"
+          fi
+
+          if [ -z "$BUILD_FILE" ]; then
+            echo "ERROR: No Gradle build file found inside ZIP"
+            find source -maxdepth 4 -type f | head -100
             exit 1
           fi
 
           PROJECT_DIR="$(dirname "$BUILD_FILE")"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Build file: $BUILD_FILE"
 
-      - name: Configure Fabric Loom
+          echo "Project directory: $PROJECT_DIR"
+          echo "Commit: $GITHUB_SHA"
+
+      - name: Fix and verify Loom version
         shell: bash
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
 
-          sed -i 's/1\.11-SNAPSHOT/1.11.8/g' build.gradle
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
 
-          if grep -q '1\.11-SNAPSHOT' build.gradle; then
-            echo "ERROR: Old Loom version remains"
-            exit 1
-          fi
+          root = Path(".")
+          files = list(root.rglob("build.gradle"))
+          files += list(root.rglob("build.gradle.kts"))
 
-          if [ ! -f settings.gradle ] && [ ! -f settings.gradle.kts ]; then
+          if not files:
+              raise SystemExit("ERROR: No Gradle build files found")
+
+          for path in files:
+              text = path.read_text(encoding="utf-8")
+
+              # Replace the broken snapshot version.
+              text = text.replace("1.11-SNAPSHOT", "1.11.8")
+
+              # Repair any other version attached to this plugin ID.
+              pattern = (
+                  r"(id\s*\(?\s*['\"]"
+                  r"net\.fabricmc\.fabric-loom-remap"
+                  r"['\"]\s*\)?\s*version\s*['\"])[^'\"]+(['\"])"
+              )
+              text = re.sub(
+                  pattern,
+                  lambda m: m.group(1) + "1.11.8" + m.group(2),
+                  text
+              )
+
+              path.write_text(text, encoding="utf-8")
+              print(f"Checked: {path}")
+
+          remaining = []
+          for path in files:
+              text = path.read_text(encoding="utf-8")
+              if "1.11-SNAPSHOT" in text:
+                  remaining.append(str(path))
+
+          if remaining:
+              raise SystemExit(
+                  "ERROR: Old Loom version remains in: "
+                  + ", ".join(remaining)
+              )
+
+          print("Loom version check passed.")
+          PY
+
+          echo "===== BUILD FILE ====="
+          sed -n '1,100p' "$(find . -maxdepth 1 \
+            -name 'build.gradle*' -type f | head -1)"
+
+      - name: Configure plugin repositories
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+
+          if [ ! -f settings.gradle ] && \
+             [ ! -f settings.gradle.kts ]; then
             cat > settings.gradle <<'EOF'
           pluginManagement {
               repositories {
-                  maven { url = 'https://maven.fabricmc.net/' }
+                  maven {
+                      url = 'https://maven.fabricmc.net/'
+                  }
                   gradlePluginPortal()
                   mavenCentral()
               }
           }
+
           rootProject.name = 'Nightfall'
           EOF
           fi
-
-          echo "=== Actual plugin declaration ==="
-          head -n 12 build.gradle
 
       - name: Build JAR
         shell: bash
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
+
+          echo "===== FINAL LOOM CHECK ====="
+          grep -n -E 'fabric-loom|SNAPSHOT' build.gradle || true
+
+          if grep -q '1.11-SNAPSHOT' build.gradle; then
+            echo "ERROR: Old Loom version detected."
+            exit 1
+          fi
+
           gradle --no-daemon clean build --stacktrace
 
       - name: Upload Nightfall JAR
@@ -91,14 +167,16 @@ jobs:
           name: Nightfall-JAR
           path: ${{ env.PROJECT_DIR }}/build/libs/*.jar
           if-no-files-found: error
+          retention-days: 14
 
-      - name: Upload diagnostic logs
+      - name: Upload build diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: Nightfall-diagnostics
+          name: Nightfall-build-logs
           path: |
-            source/**/build/reports/
-            source/**/build/tmp/
+            source/**/build/reports/**
+            source/**/build/tmp/**
           if-no-files-found: ignore
+          retention-days: 7
           
