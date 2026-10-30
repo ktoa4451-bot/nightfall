@@ -23,6 +23,27 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      - name: Extract project ZIP
+        run: |
+          set -e
+          ZIP_FILE="$(find . -maxdepth 2 -type f -iname '*.zip' | head -n 1)"
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: Project ZIP not found"
+            exit 1
+          fi
+          mkdir extracted
+          unzip -q "$ZIP_FILE" -d extracted
+
+          BUILD_FILE="$(find extracted -type f \( -name build.gradle -o -name build.gradle.kts \) | head -n 1)"
+          if [ -z "$BUILD_FILE" ]; then
+            echo "ERROR: build.gradle not found inside ZIP"
+            exit 1
+          fi
+
+          PROJECT_DIR="$(dirname "$BUILD_FILE")"
+          cp -a "$PROJECT_DIR"/. .
+          test -f settings.gradle -o -f settings.gradle.kts
+
       - name: Install Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -37,4 +58,5 @@ jobs:
           name: Nightfall-Client
           path: build/libs/*.jar
           if-no-files-found: error
+          retention-days: 14
           
