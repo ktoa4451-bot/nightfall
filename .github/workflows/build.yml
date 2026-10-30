@@ -25,10 +25,10 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - name: Setup Gradle 9.2
+      - name: Setup Gradle 9.2.0
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "9.2"
+          gradle-version: "9.2.0"
 
       - name: Extract project
         shell: bash
@@ -38,11 +38,9 @@ jobs:
           mkdir -p source
           unzip -oq nightfall.zip -d source
 
-          BUILD_FILE="$(find source -type f \
-            -name build.gradle -print -quit)"
-
+          BUILD_FILE="$(find source -type f -name build.gradle -print -quit)"
           if [ -z "$BUILD_FILE" ]; then
-            echo "ERROR: build.gradle not found"
+            echo "ERROR: build.gradle not found in nightfall.zip"
             exit 1
           fi
 
@@ -62,31 +60,17 @@ jobs:
           p = Path("build.gradle")
           s = p.read_text(encoding="utf-8")
 
-          s = s.replace(
-              "net.fabricmc.fabric-loom-remap",
-              "net.fabricmc.fabric-loom-remap"
+          pattern = (
+              r"""id\s+['"](?:net\.fabricmc\.fabric-loom-remap|fabric-loom)['"]"""
+              r"""\s+version\s+["'][^"']+["']"""
           )
+          replacement = "id 'net.fabricmc.fabric-loom-remap' version '1.15.5'"
+          updated, count = re.subn(pattern, replacement, s, count=1)
 
-          s = re.sub(
-              r"(id\s+['\"]net\.fabricmc\.fabric-loom-remap['\"]"
-              r"\s+version\s+)[\"'][^\"']+[\"']",
-              r"\g<1>'1.15.5'",
-              s
-          )
+          if count == 0:
+              raise SystemExit("ERROR: Could not find Loom plugin declaration")
 
-          if "net.fabricmc.fabric-loom-remap" not in s:
-              s = s.replace(
-                  "id 'fabric-loom' version '${loom_version}'",
-                  "id 'net.fabricmc.fabric-loom-remap' "
-                  "version '1.15.5'"
-              )
-
-          if "1.15.5" not in s:
-              raise SystemExit(
-                  "ERROR: Could not set Loom version in build.gradle"
-              )
-
-          p.write_text(s, encoding="utf-8")
+          p.write_text(updated, encoding="utf-8")
 
           props = Path("gradle.properties")
           if props.exists():
@@ -97,8 +81,6 @@ jobs:
                   t
               )
               props.write_text(t, encoding="utf-8")
-
-          print(p.read_text(encoding="utf-8")[:500])
           PY
 
       - name: Build JAR
@@ -121,7 +103,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: Nightfall-diagnostics
+          name: Nightfall-build-logs
           path: |
             source/**/build/reports/**
             source/**/build/tmp/**
