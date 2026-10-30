@@ -30,19 +30,29 @@ jobs:
         with:
           gradle-version: '8.14'
 
-      - name: Locate Nightfall project
+      - name: Extract Nightfall ZIP
+        run: |
+          mkdir -p extracted
+          unzip -q nightfall.zip -d extracted
+          echo "Archive extracted:"
+          find extracted -maxdepth 4 -type f | head -100
+
+      - name: Locate Gradle project
         id: project
         shell: bash
         run: |
-          if [ -f build.gradle ] || [ -f build.gradle.kts ]; then
-            echo "dir=." >> "$GITHUB_OUTPUT"
-          elif [ -f nightfall/build.gradle ] || [ -f nightfall/build.gradle.kts ]; then
-            echo "dir=nightfall" >> "$GITHUB_OUTPUT"
-          else
-            echo "Gradle build file not found."
-            find . -maxdepth 3 -type f
+          BUILD_FILE=$(find extracted -type f \
+            \( -name build.gradle -o -name build.gradle.kts \) \
+            -not -path '*/build/*' | head -n 1)
+
+          if [ -z "$BUILD_FILE" ]; then
+            echo "ERROR: build.gradle not found inside nightfall.zip"
             exit 1
           fi
+
+          PROJECT_DIR=$(dirname "$BUILD_FILE")
+          echo "dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+          echo "Found project: $PROJECT_DIR"
 
       - name: Build Nightfall
         working-directory: ${{ steps.project.outputs.dir }}
@@ -52,6 +62,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Nightfall-Client
-          path: '**/build/libs/*.jar'
+          path: extracted/**/build/libs/*.jar
           if-no-files-found: error
           
