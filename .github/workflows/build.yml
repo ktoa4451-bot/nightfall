@@ -25,12 +25,12 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Setup Gradle
+      - name: Setup Gradle 8.14.3
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.14.3'
 
-      - name: Extract Nightfall
+      - name: Extract project
         shell: bash
         run: |
           set -euo pipefail
@@ -40,21 +40,26 @@ jobs:
 
           BUILD_FILE="$(find source -type f -name build.gradle -print -quit)"
           if [ -z "$BUILD_FILE" ]; then
-            echo "ERROR: build.gradle not found"
+            echo "ERROR: build.gradle not found in ZIP"
             exit 1
           fi
 
           PROJECT_DIR="$(dirname "$BUILD_FILE")"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Project: $PROJECT_DIR"
+          echo "Build file: $BUILD_FILE"
 
-      - name: Fix Fabric Loom version
+      - name: Configure Fabric Loom
         shell: bash
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
 
           sed -i 's/1\.11-SNAPSHOT/1.11.8/g' build.gradle
+
+          if grep -q '1\.11-SNAPSHOT' build.gradle; then
+            echo "ERROR: Old Loom version remains"
+            exit 1
+          fi
 
           if [ ! -f settings.gradle ] && [ ! -f settings.gradle.kts ]; then
             cat > settings.gradle <<'EOF'
@@ -69,12 +74,10 @@ jobs:
           EOF
           fi
 
-          echo "=== Plugin configuration ==="
-          head -n 15 build.gradle
-          echo "=== Settings ==="
-          cat settings.gradle 2>/dev/null || true
+          echo "=== Actual plugin declaration ==="
+          head -n 12 build.gradle
 
-      - name: Build Nightfall
+      - name: Build JAR
         shell: bash
         run: |
           set -euo pipefail
@@ -88,4 +91,14 @@ jobs:
           name: Nightfall-JAR
           path: ${{ env.PROJECT_DIR }}/build/libs/*.jar
           if-no-files-found: error
+
+      - name: Upload diagnostic logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nightfall-diagnostics
+          path: |
+            source/**/build/reports/
+            source/**/build/tmp/
+          if-no-files-found: ignore
           
