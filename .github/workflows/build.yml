@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Java 21
@@ -25,16 +25,15 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - name: Setup Gradle 8.14.3
+      - name: Setup Gradle 9.2
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.14.3"
+          gradle-version: "9.2"
 
-      - name: Extract Nightfall ZIP
+      - name: Extract project
         shell: bash
         run: |
           set -euo pipefail
-
           test -f nightfall.zip
           mkdir -p source
           unzip -oq nightfall.zip -d source
@@ -43,15 +42,14 @@ jobs:
             -name build.gradle -print -quit)"
 
           if [ -z "$BUILD_FILE" ]; then
-            echo "ERROR: build.gradle not found in ZIP"
+            echo "ERROR: build.gradle not found"
             exit 1
           fi
 
           PROJECT_DIR="$(dirname "$BUILD_FILE")"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Project: $PROJECT_DIR"
 
-      - name: Fix Fabric Loom configuration
+      - name: Update Loom configuration
         shell: bash
         run: |
           set -euo pipefail
@@ -61,79 +59,56 @@ jobs:
           from pathlib import Path
           import re
 
-          build = Path("build.gradle")
-          props = Path("gradle.properties")
+          p = Path("build.gradle")
+          s = p.read_text(encoding="utf-8")
 
-          if not build.exists():
-              raise SystemExit("ERROR: build.gradle missing")
-
-          text = build.read_text(encoding="utf-8")
-
-          # Loom 1.11 uses the legacy plugin ID.
-          text = text.replace(
+          s = s.replace(
               "net.fabricmc.fabric-loom-remap",
-              "fabric-loom"
+              "net.fabricmc.fabric-loom-remap"
           )
 
-          # Use a fixed version instead of an unresolved property.
-          pattern = (
-              r"id\s+['\"]fabric-loom['\"]"
-              r"\s+version\s+['\"][^'\"]+['\"]"
+          s = re.sub(
+              r"(id\s+['\"]net\.fabricmc\.fabric-loom-remap['\"]"
+              r"\s+version\s+)[\"'][^\"']+[\"']",
+              r"\g<1>'1.15.5'",
+              s
           )
 
-          text, count = re.subn(
-              pattern,
-              "id 'fabric-loom' version '1.11.8'",
-              text,
-              count=1
-          )
+          if "net.fabricmc.fabric-loom-remap" not in s:
+              s = s.replace(
+                  "id 'fabric-loom' version '${loom_version}'",
+                  "id 'net.fabricmc.fabric-loom-remap' "
+                  "version '1.15.5'"
+              )
 
-          if count != 1:
+          if "1.15.5" not in s:
               raise SystemExit(
-                  "ERROR: Could not update Loom plugin declaration"
+                  "ERROR: Could not set Loom version in build.gradle"
               )
 
-          build.write_text(text, encoding="utf-8")
+          p.write_text(s, encoding="utf-8")
 
+          props = Path("gradle.properties")
           if props.exists():
-              ptext = props.read_text(encoding="utf-8")
-              ptext = re.sub(
+              t = props.read_text(encoding="utf-8")
+              t = re.sub(
                   r"(?m)^loom_version=.*$",
-                  "loom_version=1.11.8",
-                  ptext
+                  "loom_version=1.15.5",
+                  t
               )
-              props.write_text(ptext, encoding="utf-8")
+              props.write_text(t, encoding="utf-8")
 
-          settings = Path("settings.gradle")
-          settings_kts = Path("settings.gradle.kts")
-
-          if not settings.exists() and not settings_kts.exists():
-              settings.write_text(
-                  "pluginManagement {\n"
-                  "    repositories {\n"
-                  "        maven { url = "
-                  "'https://maven.fabricmc.net/' }\n"
-                  "        gradlePluginPortal()\n"
-                  "        mavenCentral()\n"
-                  "    }\n"
-                  "}\n"
-                  "rootProject.name = 'Nightfall'\n",
-                  encoding="utf-8"
-              )
-
-          print("Fabric Loom configuration updated.")
-          print(build.read_text(encoding="utf-8")[:500])
+          print(p.read_text(encoding="utf-8")[:500])
           PY
 
-      - name: Build mod JAR
+      - name: Build JAR
         shell: bash
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
-
           gradle --no-daemon clean build --stacktrace
 
-      - name: Upload Nightfall JAR
+      - name: Upload JAR
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -146,7 +121,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: Nightfall-build-logs
+          name: Nightfall-diagnostics
           path: |
             source/**/build/reports/**
             source/**/build/tmp/**
