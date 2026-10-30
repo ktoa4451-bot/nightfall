@@ -40,14 +40,14 @@ jobs:
 
           BUILD_FILE="$(find source -type f -name build.gradle -print -quit)"
           if [ -z "$BUILD_FILE" ]; then
-            echo "ERROR: build.gradle not found in nightfall.zip"
+            echo "ERROR: build.gradle not found"
             exit 1
           fi
 
           PROJECT_DIR="$(dirname "$BUILD_FILE")"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Update Loom configuration
+      - name: Fix Loom and source sets
         shell: bash
         run: |
           set -euo pipefail
@@ -60,17 +60,33 @@ jobs:
           p = Path("build.gradle")
           s = p.read_text(encoding="utf-8")
 
+          # Use the published Loom plugin.
           pattern = (
               r"""id\s+['"](?:net\.fabricmc\.fabric-loom-remap|fabric-loom)['"]"""
               r"""\s+version\s+["'][^"']+["']"""
           )
-          replacement = "id 'net.fabricmc.fabric-loom-remap' version '1.15.5'"
-          updated, count = re.subn(pattern, replacement, s, count=1)
-
+          s, count = re.subn(
+              pattern,
+              "id 'net.fabricmc.fabric-loom-remap' version '1.15.5'",
+              s,
+              count=1
+          )
           if count == 0:
-              raise SystemExit("ERROR: Could not find Loom plugin declaration")
+              raise SystemExit("ERROR: Loom plugin declaration not found")
 
-          p.write_text(updated, encoding="utf-8")
+          # Sources currently live in src/main/java and use client classes.
+          s = re.sub(
+              r"(?m)^\s*splitEnvironmentSourceSets\(\)\s*\n",
+              "",
+              s
+          )
+          s = re.sub(
+              r"(?m)^\s*sourceSet\s+sourceSets\.client\s*\n",
+              "",
+              s
+          )
+
+          p.write_text(s, encoding="utf-8")
 
           props = Path("gradle.properties")
           if props.exists():
@@ -81,6 +97,9 @@ jobs:
                   t
               )
               props.write_text(t, encoding="utf-8")
+
+          print("Loom and source-set configuration updated.")
+          print(p.read_text(encoding="utf-8")[:1200])
           PY
 
       - name: Build JAR
