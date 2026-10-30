@@ -49,17 +49,22 @@ jobs:
           echo "Содержимое build_dir:"
           ls -la build_dir
 
-      # Принудительно кладем settings.gradle в корень, чтобы Gradle его увидел
       - name: Force settings.gradle to root
         run: |
           cd build_dir
-          FOUND=$(find . -name "settings.gradle" -type f | head -n 1)
-          if [ -z "$FOUND" ]; then
-            echo "::error::settings.gradle отсутствует в архиве!"
-            exit 1
+          if [ ! -f "settings.gradle" ]; then
+            echo "settings.gradle не найден в корне, ищем..."
+            FOUND=$(find . -name "settings.gradle" -type f | head -n 1)
+            if [ -z "$FOUND" ]; then
+              echo "::error::settings.gradle отсутствует в архиве!"
+              exit 1
+            fi
+            cp "$FOUND" ./settings.gradle
+            echo "Скопирован из $FOUND"
+          else
+            echo "settings.gradle уже в корне."
           fi
-          cp "$FOUND" ./settings.gradle
-          echo "=== settings.gradle в корне ==="
+          echo "=== settings.gradle ==="
           cat settings.gradle
 
       - name: Generate Gradle Wrapper
