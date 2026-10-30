@@ -25,10 +25,10 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Install Gradle
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.12'
+          gradle-version: '8.14.3'
 
       - name: Extract Nightfall
         shell: bash
@@ -36,40 +36,25 @@ jobs:
           set -euo pipefail
           test -f nightfall.zip
           mkdir -p source
-          unzip -q nightfall.zip -d source
+          unzip -oq nightfall.zip -d source
 
           BUILD_FILE="$(find source -type f -name build.gradle -print -quit)"
           if [ -z "$BUILD_FILE" ]; then
-            echo "ERROR: build.gradle not found in nightfall.zip"
+            echo "ERROR: build.gradle not found"
             exit 1
           fi
 
           PROJECT_DIR="$(dirname "$BUILD_FILE")"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Project directory: $PROJECT_DIR"
-          ls -la "$PROJECT_DIR"
+          echo "Project: $PROJECT_DIR"
 
-      - name: Configure Fabric plugin repository
-        working-directory: source
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p .github-placeholder
-          cat > settings.gradle <<'EOF'
-          pluginManagement {
-              repositories {
-                  maven { url = 'https://maven.fabricmc.net/' }
-                  gradlePluginPortal()
-                  mavenCentral()
-              }
-          }
-          EOF
-
-      - name: Build Nightfall
+      - name: Fix Fabric Loom version
         shell: bash
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
+
+          sed -i 's/1\.11-SNAPSHOT/1.11.8/g' build.gradle
 
           if [ ! -f settings.gradle ] && [ ! -f settings.gradle.kts ]; then
             cat > settings.gradle <<'EOF'
@@ -84,23 +69,23 @@ jobs:
           EOF
           fi
 
-          gradle --no-daemon clean build --stacktrace
+          echo "=== Plugin configuration ==="
+          head -n 15 build.gradle
+          echo "=== Settings ==="
+          cat settings.gradle 2>/dev/null || true
 
-      - name: Upload build logs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: nightfall-build-logs
-          path: |
-            source/**/build/reports/
-            source/**/build/tmp/
-          if-no-files-found: ignore
+      - name: Build Nightfall
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          gradle --no-daemon clean build --stacktrace
 
       - name: Upload Nightfall JAR
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: Nightfall-JAR
-          path: source/**/build/libs/*.jar
+          path: ${{ env.PROJECT_DIR }}/build/libs/*.jar
           if-no-files-found: error
           
