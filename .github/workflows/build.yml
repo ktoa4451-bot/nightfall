@@ -1,39 +1,31 @@
-name: Nightfall Client Build
+- name: Show project structure
+    run: |
+      pwd
+      ls -la
+      find . -maxdepth 3 \( -name "gradlew" -o -name "build.gradle" -o -name "build.gradle.kts" \)
 
-on:
-workflow_dispatch:
-push:
-branches:
-- main
-- master
-
-permissions:
-contents: read
-
-jobs:
-build:
-runs-on: ubuntu-latest
-
-steps:
-  - name: Checkout repository
-    uses: actions/checkout@v4
-
-  - name: Setup Java 21
-    uses: actions/setup-java@v4
-    with:
-      distribution: temurin
-      java-version: '21'
-      cache: gradle
-
-  - name: Grant execute permission
-    run: chmod +x gradlew
+  - name: Setup Gradle
+    uses: gradle/actions/setup-gradle@v4
 
   - name: Build Nightfall Client
-    run: ./gradlew --no-daemon clean build
+    run: |
+      if [ -f gradlew ]; then
+        chmod +x gradlew
+        ./gradlew --no-daemon build
+      elif [ -f nightfall/gradlew ]; then
+        cd nightfall
+        chmod +x gradlew
+        ./gradlew --no-daemon build
+      else
+        echo "Gradle Wrapper not found"
+        exit 1
+      fi
 
-  - name: Upload build artifacts
+  - name: Upload JAR
+    if: success()
     uses: actions/upload-artifact@v4
     with:
-      name: Nightfall-Client-Build
-      path: build/libs/*.jar
+      name: Nightfall-Client
+      path: |
+        **/build/libs/*.jar
       if-no-files-found: error
