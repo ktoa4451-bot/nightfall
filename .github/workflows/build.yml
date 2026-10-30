@@ -4,8 +4,7 @@ name: Nightfall Client Build
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [main]
 
 permissions:
   contents: read
@@ -27,13 +26,9 @@ jobs:
       - name: Extract Nightfall ZIP
         shell: bash
         run: |
-          set -eo pipefail
-
-          echo "=== Repository ==="
-          ls -la
+          set -euo pipefail
 
           ZIP_FILE="$(find . -maxdepth 4 -type f -iname '*.zip' -print -quit)"
-
           if [ -z "$ZIP_FILE" ]; then
             echo "ERROR: ZIP not found"
             exit 1
@@ -48,28 +43,37 @@ jobs:
           \) -print -quit)"
 
           if [ -z "$BUILD_FILE" ]; then
-            echo "ERROR: build.gradle not found inside ZIP"
-            find extracted -maxdepth 5 -type f -print
+            echo "ERROR: build.gradle not found in ZIP"
             exit 1
           fi
 
           PROJECT_DIR="$(dirname "$BUILD_FILE")"
-
-          echo "Project directory: $PROJECT_DIR"
           cp -a "$PROJECT_DIR"/. .
 
           if [ ! -f settings.gradle ] && \
              [ ! -f settings.gradle.kts ]; then
-            echo "Creating settings.gradle"
-            printf "rootProject.name = 'nightfall'\n" > settings.gradle
+            cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  maven { url = 'https://maven.fabricmc.net/' }
+                  gradlePluginPortal()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = 'nightfall'
+          EOF
           fi
 
-          echo "=== Gradle files ==="
-          ls -la
-          test -d src || {
-            echo "ERROR: src directory is missing"
-            exit 1
-          }
+          echo "=== Original Loom declaration ==="
+          grep -n -E 'fabric-loom|SNAPSHOT' build.gradle || true
+
+          sed -i \
+            -e 's/net\.fabricmc\.fabric-loom-remap/fabric-loom/g' \
+            -e 's/1\.11-SNAPSHOT/1.11.8/g' \
+            build.gradle
+
+          echo "=== Updated Loom declaration ==="
+          grep -n -E 'fabric-loom|SNAPSHOT' build.gradle || true
 
       - name: Install Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -79,7 +83,7 @@ jobs:
       - name: Build Nightfall
         run: gradle --no-daemon clean build
 
-      - name: Upload JAR artifact
+      - name: Upload JAR
         uses: actions/upload-artifact@v4
         with:
           name: Nightfall-Client
