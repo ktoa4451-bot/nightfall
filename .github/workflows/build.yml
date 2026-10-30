@@ -12,24 +12,21 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Клонируем репозиторий
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Ставим Java 21 (обязательно для 1.21.11)
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
 
-      # 3. Ставим Gradle 8.12, чтобы сгенерировать wrapper
+      # Gradle 8.14+ требуется для Loom 1.11
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.12'
+          gradle-version: '8.14'
 
-      # 4. Распаковываем ZIP
       - name: Extract ZIP
         run: |
           if [ ! -f "nightfall.zip" ]; then
@@ -40,8 +37,6 @@ jobs:
           mkdir -p build_dir
           unzip -q nightfall.zip -d build_dir
           
-          # Если внутри архива есть одна корневая папка (например "nightfall/"), 
-          # поднимаем её содержимое на уровень выше.
           COUNT=$(ls -1 build_dir | wc -l)
           FIRST=$(ls -1 build_dir | head -n 1)
           if [ "$COUNT" -eq 1 ] && [ -d "build_dir/$FIRST" ]; then
@@ -55,41 +50,32 @@ jobs:
           echo "Содержимое build_dir:"
           ls -la build_dir
 
-      # 5. Генерируем gradlew, если его нет в архиве
       - name: Generate Gradle Wrapper
         run: |
           cd build_dir
           if [ ! -f "./gradlew" ]; then
             echo "gradlew не найден, генерируем..."
-            gradle wrapper --gradle-version 8.12
+            gradle wrapper --gradle-version 8.14
           fi
           chmod +x ./gradlew
           ./gradlew --version
 
-      # 6. Собираем JAR
       - name: Build with Gradle
         run: |
           cd build_dir
           ./gradlew build --no-daemon --stacktrace
 
-      # 7. Забираем готовый JAR (без sources и dev)
       - name: Collect JAR
         if: success()
         run: |
           cd build_dir
           mkdir -p ../output
-          echo "Найденные JAR-файлы:"
-          find build/libs -maxdepth 1 -name '*.jar' ! -name '*-sources.jar' ! -name '*-dev.jar'
-          
           find build/libs -maxdepth 1 -name '*.jar' \
             ! -name '*-sources.jar' \
             ! -name '*-dev.jar' \
             -exec cp {} ../output/ \;
-            
-          echo "Скопировано в output:"
           ls -la ../output
 
-      # 8. Отдаём JAR как артефакт
       - name: Upload JAR
         if: success()
         uses: actions/upload-artifact@v4
@@ -98,7 +84,6 @@ jobs:
           path: output/*.jar
           if-no-files-found: error
 
-      # 9. Если упало — отдаём логи сборки
       - name: Upload build reports on failure
         if: failure()
         uses: actions/upload-artifact@v4
