@@ -1,10 +1,12 @@
 
-name: Nightfall Client Build
+name: Build Nightfall
 
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    paths:
+      - 'nightfall.zip'
+      - '.github/workflows/build.yml'
 
 permissions:
   contents: read
@@ -17,41 +19,59 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java 21
-        uses: actions/setup-java@v5
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
 
-      - name: Extract Nightfall ZIP
+      - name: Install Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.12'
+
+      - name: Extract Nightfall
         shell: bash
         run: |
           set -euo pipefail
+          test -f nightfall.zip
+          mkdir -p source
+          unzip -q nightfall.zip -d source
 
-          ZIP_FILE="$(find . -maxdepth 4 -type f -iname '*.zip' -print -quit)"
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: ZIP not found"
-            exit 1
-          fi
-
-          mkdir -p extracted
-          unzip -oq "$ZIP_FILE" -d extracted
-
-          BUILD_FILE="$(find extracted -type f \( \
-            -name build.gradle -o \
-            -name build.gradle.kts \
-          \) -print -quit)"
-
+          BUILD_FILE="$(find source -type f -name build.gradle -print -quit)"
           if [ -z "$BUILD_FILE" ]; then
-            echo "ERROR: build.gradle not found in ZIP"
+            echo "ERROR: build.gradle not found in nightfall.zip"
             exit 1
           fi
 
           PROJECT_DIR="$(dirname "$BUILD_FILE")"
-          cp -a "$PROJECT_DIR"/. .
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Project directory: $PROJECT_DIR"
+          ls -la "$PROJECT_DIR"
 
-          if [ ! -f settings.gradle ] && \
-             [ ! -f settings.gradle.kts ]; then
+      - name: Configure Fabric plugin repository
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .github-placeholder
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  maven { url = 'https://maven.fabricmc.net/' }
+                  gradlePluginPortal()
+                  mavenCentral()
+              }
+          }
+          EOF
+
+      - name: Build Nightfall
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+
+          if [ ! -f settings.gradle ] && [ ! -f settings.gradle.kts ]; then
             cat > settings.gradle <<'EOF'
           pluginManagement {
               repositories {
@@ -60,34 +80,27 @@ jobs:
                   mavenCentral()
               }
           }
-          rootProject.name = 'nightfall'
+          rootProject.name = 'Nightfall'
           EOF
           fi
 
-          echo "=== Original Loom declaration ==="
-          grep -n -E 'fabric-loom|SNAPSHOT' build.gradle || true
+          gradle --no-daemon clean build --stacktrace
 
-          sed -i \
-            -e 's/net\.fabricmc\.fabric-loom-remap/fabric-loom/g' \
-            -e 's/1\.11-SNAPSHOT/1.11.8/g' \
-            build.gradle
-
-          echo "=== Updated Loom declaration ==="
-          grep -n -E 'fabric-loom|SNAPSHOT' build.gradle || true
-
-      - name: Install Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.12'
-
-      - name: Build Nightfall
-        run: gradle --no-daemon clean build
-
-      - name: Upload JAR
+      - name: Upload build logs
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: Nightfall-Client
-          path: build/libs/*.jar
+          name: nightfall-build-logs
+          path: |
+            source/**/build/reports/
+            source/**/build/tmp/
+          if-no-files-found: ignore
+
+      - name: Upload Nightfall JAR
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nightfall-JAR
+          path: source/**/build/libs/*.jar
           if-no-files-found: error
-          retention-days: 14
           
