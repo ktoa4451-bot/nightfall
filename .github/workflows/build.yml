@@ -1,11 +1,11 @@
 
-name: Nightfall ZIP to JAR
+name: Nightfall Build
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - "**.zip"
+      - "nightfall-with-build-yml.zip"
       - ".github/workflows/build.yml"
 
 permissions:
@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Java 21
@@ -25,54 +25,37 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - name: Setup Gradle 9.2.0
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.2.0"
 
-      - name: Find and extract project
+      - name: Extract Nightfall project
         shell: bash
         run: |
           set -euo pipefail
-
-          ZIP_FILE="./nightfall-with-build-yml.zip"
-
-          if [ ! -f "$ZIP_FILE" ]; then
-            ZIP_FILE="$(find . -maxdepth 3 -type f -name '*.zip' \
-              -not -path './.git/*' -print -quit)"
-          fi
-
-          if [ -z "${ZIP_FILE:-}" ] || [ ! -f "$ZIP_FILE" ]; then
-            echo "::error::ZIP archive not found"
-            find . -maxdepth 3 -type f
+          ZIP_FILE="nightfall-with-build-yml.zip"
+          test -f "$ZIP_FILE" || {
+            echo "ERROR: $ZIP_FILE not found in repository root"
+            ls -la
             exit 1
-          fi
+          }
 
-          echo "Using archive: $ZIP_FILE"
           mkdir -p source
           unzip -oq "$ZIP_FILE" -d source
 
-          BUILD_FILE="$(find source -type f -name build.gradle \
-            -not -path '*/build/*' -print -quit)"
-
+          BUILD_FILE="$(find source -type f -name build.gradle -print -quit)"
           if [ -z "$BUILD_FILE" ]; then
-            echo "::error::build.gradle not found inside archive"
-            find source -maxdepth 5 -type f | head -n 100
+            echo "ERROR: build.gradle not found inside ZIP"
+            find source -maxdepth 4 -type f | head -n 100
             exit 1
           fi
 
           PROJECT_DIR="$(dirname "$BUILD_FILE")"
-
-          if [ ! -f "$PROJECT_DIR/settings.gradle" ] && \
-             [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
-            echo "::error::settings.gradle not found"
-            exit 1
-          fi
-
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Project: $PROJECT_DIR"
+          echo "Project directory: $PROJECT_DIR"
 
-      - name: Fix Loom configuration
+      - name: Configure Loom version
         shell: bash
         run: |
           set -euo pipefail
@@ -90,37 +73,26 @@ jobs:
               r"""\s+version\s+["'][^"']+["']"""
           )
 
-          s, n = re.subn(
-              pattern,
-              "id 'net.fabricmc.fabric-loom-remap' version '1.15.5'",
-              s,
-              count=1
-          )
+          replacement = "id 'net.fabricmc.fabric-loom-remap' version '1.15.5'"
+          s, count = re.subn(pattern, replacement, s, count=1)
 
-          if not n and "1.15.5" not in s:
-              raise SystemExit("Loom plugin declaration not recognized")
-
-          s = re.sub(
-              r"(?m)^\s*splitEnvironmentSourceSets\(\)\s*\n", "", s
-          )
-          s = re.sub(
-              r"(?m)^\s*sourceSet\s+sourceSets\.client\s*\n", "", s
-          )
-
-          p.write_text(s, encoding="utf-8")
+          if count:
+              p.write_text(s, encoding="utf-8")
+              print("Updated Loom plugin to 1.15.5")
+          else:
+              print("Loom declaration not changed; checking existing configuration")
 
           props = Path("gradle.properties")
           if props.exists():
-              t = props.read_text(encoding="utf-8")
-              t = re.sub(
-                  r"(?m)^loom_version=.*$",
-                  "loom_version=1.15.5",
-                  t
-              )
-              props.write_text(t, encoding="utf-8")
+              s = props.read_text(encoding="utf-8")
+              s = re.sub(r"(?m)^loom_version=.*$", "loom_version=1.15.5", s)
+              props.write_text(s, encoding="utf-8")
+
+          # Keep split client source-set configuration intact.
+          print("Source-set configuration preserved.")
           PY
 
-      - name: Patch Minecraft 1.21.11 sources
+      - name: Patch Minecraft 1.21.11 API names
         shell: bash
         run: |
           set -euo pipefail
@@ -130,73 +102,76 @@ jobs:
           from pathlib import Path
           import re
 
-          root = Path("src/main/java"
-          )
-          if not root.exists():
-              raise SystemExit("src/main/java not found")
+          roots = [Path("src/main/java"), Path("src/client/java")]
 
-          for p in root.rglob("*.java"):
-              s = p.read_text(encoding="utf-8")
-              old = s
+          for root in roots:
+              if not root.exists():
+                  continue
 
-              s = s.replace(
-                  "import net.minecraft.resources.ResourceLocation;",
-                  "import net.minecraft.resources.Identifier;"
-              )
-              s = s.replace(
-                  "ResourceLocation.fromNamespaceAndPath",
-                  "Identifier.fromNamespaceAndPath"
-              )
-
-              if p.name == "ClickGUI.java":
-                  if "import net.minecraft.client.input.MouseButtonEvent;" not in s:
-                      s = s.replace(
-                          "import net.minecraft.client.gui.screens.Screen;",
-                          "import net.minecraft.client.gui.screens.Screen;\n"
-                          "import net.minecraft.client.input.MouseButtonEvent;"
-                      )
-
-                  s = re.sub(
-                      r"public boolean mouseClicked\s*\(\s*double\s+mx\s*,"
-                      r"\s*double\s+my\s*,\s*int\s+button\s*\)\s*\{",
-                      "public boolean mouseClicked(MouseButtonEvent event, "
-                      "boolean doubleClick) {\n"
-                      "        double mx = event.x();\n"
-                      "        double my = event.y();\n"
-                      "        int button = event.button();",
-                      s
-                  )
+              for p in root.rglob("*.java"):
+                  s = p.read_text(encoding="utf-8")
+                  old = s
 
                   s = s.replace(
-                      "super.mouseClicked(mx, my, button)",
-                      "super.mouseClicked(event, doubleClick)"
+                      "import net.minecraft.resources.ResourceLocation;",
+                      "import net.minecraft.resources.Identifier;"
+                  )
+                  s = s.replace(
+                      "ResourceLocation.fromNamespaceAndPath",
+                      "Identifier.fromNamespaceAndPath"
                   )
 
-              if p.name == "NightfallClient.java":
-                  if "import net.minecraft.resources.Identifier;" not in s:
+                  if p.name == "ClickGUI.java":
+                      if (
+                          "import net.minecraft.client.input.MouseButtonEvent;" not in s
+                          and "import net.minecraft.client.gui.screens.Screen;" in s
+                      ):
+                          s = s.replace(
+                              "import net.minecraft.client.gui.screens.Screen;",
+                              "import net.minecraft.client.gui.screens.Screen;\n"
+                              "import net.minecraft.client.input.MouseButtonEvent;"
+                          )
+
+                      s = re.sub(
+                          r"public boolean mouseClicked\s*\(\s*double\s+mx\s*,"
+                          r"\s*double\s+my\s*,\s*int\s+button\s*\)\s*\{",
+                          "public boolean mouseClicked(MouseButtonEvent event, "
+                          "boolean doubleClick) {\n"
+                          "        double mx = event.x();\n"
+                          "        double my = event.y();\n"
+                          "        int button = event.button();",
+                          s
+                      )
                       s = s.replace(
-                          "import net.minecraft.client.KeyMapping;",
-                          "import net.minecraft.client.KeyMapping;\n"
-                          "import net.minecraft.resources.Identifier;"
+                          "super.mouseClicked(mx, my, button)",
+                          "super.mouseClicked(event, doubleClick)"
                       )
 
-                  s = s.replace(
-                      '"category.nightfall"',
-                      'KeyMapping.Category.register('
-                      'Identifier.fromNamespaceAndPath("nightfall", "main"))'
-                  )
-
-              if s != old:
-                  p.write_text(s, encoding="utf-8")
-                  print("Patched:", p)
+                  if s != old:
+                      p.write_text(s, encoding="utf-8")
+                      print("Patched:", p)
           PY
 
-      - name: Build JAR
+      - name: Build JAR and print diagnostics
         shell: bash
         run: |
-          set -euo pipefail
+          set +e
           cd "$PROJECT_DIR"
-          gradle --no-daemon clean build --stacktrace
+
+          gradle --no-daemon clean build \
+            --stacktrace --console=plain > build.log 2>&1
+
+          RESULT=$?
+
+          echo "========== COMPILER ERRORS =========="
+          grep -n -B 3 -A 5 -E \
+            'error:|What went wrong:|Compilation failed|cannot find symbol|^[^ ]+\.java:[0-9]+:' \
+            build.log | head -n 120 || true
+
+          echo "========== LAST 100 LOG LINES =========="
+          tail -n 100 build.log
+
+          exit "$RESULT"
 
       - name: Upload JAR
         if: success()
@@ -205,19 +180,15 @@ jobs:
           name: Nightfall-JAR
           path: |
             ${{ env.PROJECT_DIR }}/build/libs/*.jar
-            !${{ env.PROJECT_DIR }}/build/libs/*-sources.jar
-            !${{ env.PROJECT_DIR }}/build/libs/*-dev.jar
           if-no-files-found: error
           retention-days: 14
 
-      - name: Upload diagnostics
-        if: failure()
+      - name: Upload build log
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Nightfall-build-logs
-          path: |
-            source/**/build/reports/**
-            source/**/build/tmp/**
+          name: Nightfall-build-log
+          path: ${{ env.PROJECT_DIR }}/build.log
           if-no-files-found: ignore
           retention-days: 7
           
