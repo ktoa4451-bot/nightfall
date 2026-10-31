@@ -4,13 +4,7 @@ name: Nightfall Build
 on:
   workflow_dispatch:
   push:
-    paths:
-      - "nightfall/**"
-      - ".github/workflows/build.yml"
   pull_request:
-    paths:
-      - "nightfall/**"
-      - ".github/workflows/build.yml"
 
 permissions:
   contents: read
@@ -24,11 +18,23 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Java 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
-          cache: gradle
+
+      - name: Locate Gradle project
+        id: locate
+        shell: bash
+        run: |
+          FILE=$(find . -type f -name build.gradle -not -path '*/build/*' | head -n 1)
+          if [ -z "$FILE" ]; then
+            echo "ERROR: build.gradle not found. Check whether the ZIP was extracted into the repository."
+            exit 1
+          fi
+          DIR=$(dirname "$FILE")
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+          echo "Found Gradle project: $DIR"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -36,16 +42,16 @@ jobs:
           gradle-version: "9.2.0"
 
       - name: Build Nightfall
-        working-directory: nightfall
+        working-directory: ${{ steps.locate.outputs.dir }}
         run: gradle --no-daemon clean build --stacktrace
 
-      - name: Upload mod JAR
+      - name: Upload JAR
         uses: actions/upload-artifact@v4
         with:
           name: nightfall-jar
           path: |
-            nightfall/build/libs/*.jar
-            !nightfall/build/libs/*-sources.jar
-            !nightfall/build/libs/*-dev.jar
+            **/build/libs/*.jar
+            !**/*-sources.jar
+            !**/*-dev.jar
           if-no-files-found: error
           
