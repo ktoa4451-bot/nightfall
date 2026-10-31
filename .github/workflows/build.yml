@@ -1,4 +1,3 @@
-
 name: Nightfall Client Build
 
 'on':
@@ -32,29 +31,39 @@ jobs:
 
       - name: Check ZIP
         run: |
-          if [ ! -f nightfall.zip ]; then
-            echo "ERROR: nightfall.zip not found in repository root"
-            find . -maxdepth 3 -type f | head -100
+          test -f nightfall.zip || {
+            echo "ERROR: nightfall.zip not found"
             exit 1
-          fi
+          }
 
       - name: Extract project
         run: |
           mkdir -p extracted
           unzip -q nightfall.zip -d extracted
-          find extracted -type f -name 'build.gradle*'
           BUILD_FILE=$(find extracted -type f \
             \( -name build.gradle -o -name build.gradle.kts \) \
             | head -n 1)
           if [ -z "$BUILD_FILE" ]; then
-            echo "ERROR: Gradle build file not found in ZIP"
+            echo "ERROR: Gradle build file not found"
             exit 1
           fi
           echo "PROJECT_DIR=$(dirname "$BUILD_FILE")" >> "$GITHUB_ENV"
 
-      - name: Build Nightfall
-        run: gradle --no-daemon clean build
+      - name: Fix Loom version for this build
         working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          if grep -q "version: '1.11'" build.gradle; then
+            sed -i "s/version: '1\.11'/version: '1.11.8'/" build.gradle
+          elif grep -q 'version: "1.11"' build.gradle; then
+            sed -i 's/version: "1\.11"/version: "1.11.8"/' build.gradle
+          fi
+          echo "Plugin declaration:"
+          grep -n -A2 -B2 "fabric-loom-remap" build.gradle
+
+      - name: Build Nightfall
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: gradle --no-daemon clean build
 
       - name: Upload JAR
         uses: actions/upload-artifact@v4
