@@ -24,60 +24,80 @@ steps:
       distribution: temurin
       java-version: '21'
 
-  - name: Find and extract ZIP
+  - name: Install Gradle 9.2.0
+    uses: gradle/actions/setup-gradle@v4
+    with:
+      gradle-version: '9.2.0'
+
+  - name: Find and extract Nightfall ZIP
     shell: bash
     run: |
-      set -e
+      set -euo pipefail
+
       mkdir -p extracted
 
-      ZIP_FILE="$(find . -maxdepth 3 -type f -iname '*.zip' \
-        ! -path './.git/*' | head -n 1)"
+      ZIP_FILE=$(find . -maxdepth 3 -type f \
+        -iname '*.zip' \
+        ! -path './.git/*' | head -n 1)
 
       if [ -n "$ZIP_FILE" ]; then
-        echo "Extracting: $ZIP_FILE"
+        echo "ZIP found: $ZIP_FILE"
         unzip -oq "$ZIP_FILE" -d extracted
       else
-        echo "ZIP not found; checking existing project files."
-        cp -a . extracted/project
+        echo "No ZIP found. Checking repository files."
+        cp -a . extracted/
       fi
 
-  - name: Locate Gradle project
-    id: project
+  - name: Find Gradle project
+    id: locate
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      BUILD_FILE=$(find extracted -type f \
+        \( -name build.gradle -o -name build.gradle.kts \) \
+        ! -path '*/.gradle/*' | head -n 1)
+
+      if [ -z "$BUILD_FILE" ]; then
+        echo "::error::build.gradle not found!"
+        exit 1
+      fi
+
+      PROJECT_DIR=$(dirname "$BUILD_FILE")
+
+      echo "Project: $PROJECT_DIR"
+      echo "dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+
+      if [ ! -f "$PROJECT_DIR/settings.gradle" ] && \
+         [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
+        echo "::error::settings.gradle not found!"
+        exit 1
+      fi
+
+  - name: Check project files
+    working-directory: ${{ steps.locate.outputs.dir }}
     shell: bash
     run: |
       set -e
 
-      BUILD_FILE="$(find extracted -type f \
-        \( -name build.gradle -o -name build.gradle.kts \) \
-        -not -path '*/.gradle/*' | head -n 1)"
+      test -f build.gradle -o -f build.gradle.kts
+      test -f gradle.properties
+      test -f settings.gradle -o -f settings.gradle.kts
+      test -f src/main/resources/fabric.mod.json
 
-      if [ -z "$BUILD_FILE" ]; then
-        echo "::error::No build.gradle or build.gradle.kts found in ZIP."
-        exit 1
-      fi
+      echo "Nightfall project structure verified."
 
-      PROJECT_DIR="$(dirname "$BUILD_FILE")"
-      echo "dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
-      echo "Found project: $PROJECT_DIR"
+  - name: Build Nightfall
+    working-directory: ${{ steps.locate.outputs.dir }}
+    run: gradle --no-daemon clean build --stacktrace
 
-      if [ ! -f "$PROJECT_DIR/gradlew" ]; then
-        echo "::error::Gradle Wrapper not found beside build.gradle."
-        echo "Include gradlew, gradlew.bat and gradle/wrapper in the ZIP."
-        exit 1
-      fi
-
-  - name: Build JAR
-    working-directory: ${{ steps.project.outputs.dir }}
-    shell: bash
-    run: |
-      chmod +x ./gradlew
-      ./gradlew --no-daemon clean build
-
-  - name: Upload generated JAR
+  - name: Upload Nightfall JAR
     uses: actions/upload-artifact@v4
     with:
       name: Nightfall-Client-JAR
       path: |
-        extracted/**/build/libs/*.jar
+        ${{ steps.locate.outputs.dir }}/build/libs/*.jar
+        !${{ steps.locate.outputs.dir }}/build/libs/*-sources.jar
+        !${{ steps.locate.outputs.dir }}/build/libs/*-dev.jar
       if-no-files-found: error
       retention-days: 14
