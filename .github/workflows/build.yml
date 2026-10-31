@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "**/nightfall.zip"
+      - "**.zip"
       - ".github/workflows/build.yml"
 
 permissions:
@@ -35,17 +35,20 @@ jobs:
         run: |
           set -euo pipefail
 
-          ZIP_FILE="$(find . -type f -iname 'nightfall.zip' \
-            -not -path './.git/*' -print -quit)"
+          ZIP_FILE="./nightfall-with-build-yml.zip"
 
-          if [ -z "$ZIP_FILE" ]; then
-            echo "::error::nightfall.zip not found in repository"
-            echo "Repository files:"
-            find . -maxdepth 5 -type f | head -n 150
+          if [ ! -f "$ZIP_FILE" ]; then
+            ZIP_FILE="$(find . -maxdepth 3 -type f -name '*.zip' \
+              -not -path './.git/*' -print -quit)"
+          fi
+
+          if [ -z "${ZIP_FILE:-}" ] || [ ! -f "$ZIP_FILE" ]; then
+            echo "::error::ZIP archive not found"
+            find . -maxdepth 3 -type f
             exit 1
           fi
 
-          echo "Found ZIP: $ZIP_FILE"
+          echo "Using archive: $ZIP_FILE"
           mkdir -p source
           unzip -oq "$ZIP_FILE" -d source
 
@@ -53,8 +56,8 @@ jobs:
             -not -path '*/build/*' -print -quit)"
 
           if [ -z "$BUILD_FILE" ]; then
-            echo "::error::build.gradle not found inside ZIP"
-            find source -maxdepth 6 -type f | head -n 150
+            echo "::error::build.gradle not found inside archive"
+            find source -maxdepth 5 -type f | head -n 100
             exit 1
           fi
 
@@ -62,12 +65,12 @@ jobs:
 
           if [ ! -f "$PROJECT_DIR/settings.gradle" ] && \
              [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
-            echo "::error::settings.gradle not found in $PROJECT_DIR"
+            echo "::error::settings.gradle not found"
             exit 1
           fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Project directory: $PROJECT_DIR"
+          echo "Project: $PROJECT_DIR"
 
       - name: Fix Loom configuration
         shell: bash
@@ -94,11 +97,8 @@ jobs:
               count=1
           )
 
-          if not n:
-              if "1.15.5" not in s:
-                  raise SystemExit(
-                      "Loom declaration not recognized; inspect build.gradle"
-                  )
+          if not n and "1.15.5" not in s:
+              raise SystemExit("Loom plugin declaration not recognized")
 
           s = re.sub(
               r"(?m)^\s*splitEnvironmentSourceSets\(\)\s*\n", "", s
@@ -118,8 +118,6 @@ jobs:
                   t
               )
               props.write_text(t, encoding="utf-8")
-
-          print("Loom configuration checked.")
           PY
 
       - name: Patch Minecraft 1.21.11 sources
@@ -132,8 +130,8 @@ jobs:
           from pathlib import Path
           import re
 
-          root = Path("src/main/java")
-
+          root = Path("src/main/java"
+          )
           if not root.exists():
               raise SystemExit("src/main/java not found")
 
@@ -191,8 +189,6 @@ jobs:
               if s != old:
                   p.write_text(s, encoding="utf-8")
                   print("Patched:", p)
-
-          print("Source patch step completed.")
           PY
 
       - name: Build JAR
@@ -212,15 +208,6 @@ jobs:
             !${{ env.PROJECT_DIR }}/build/libs/*-sources.jar
             !${{ env.PROJECT_DIR }}/build/libs/*-dev.jar
           if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload sources
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Nightfall-Sources
-          path: ${{ env.PROJECT_DIR }}/build/libs/*-sources.jar
-          if-no-files-found: ignore
           retention-days: 14
 
       - name: Upload diagnostics
