@@ -1,12 +1,12 @@
 
-name: Nightfall Client Build
+name: Nightfall Build
 
-'on':
+on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-      - master
+    paths:
+      - "nightfall.zip"
+      - ".github/workflows/**"
 
 permissions:
   contents: read
@@ -19,18 +19,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Java 21
-        uses: actions/setup-java@v5
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: "21"
 
-      - name: Setup Gradle
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.14'
+          gradle-version: "8.14"
 
-      - name: Check ZIP
+      - name: Extract Nightfall
         shell: bash
         run: |
           test -f nightfall.zip || {
@@ -38,58 +38,72 @@ jobs:
             exit 1
           }
 
-      - name: Extract project
-        shell: bash
-        run: |
           mkdir -p extracted
-          unzip -q nightfall.zip -d extracted
+          unzip -oq nightfall.zip -d extracted
 
           BUILD_FILE="$(find extracted -type f \
             \( -name build.gradle -o -name build.gradle.kts \) \
             -print -quit)"
 
           if [ -z "$BUILD_FILE" ]; then
-            echo "ERROR: build.gradle not found in ZIP"
+            echo "ERROR: Gradle build file not found"
             exit 1
           fi
 
-          echo "PROJECT_DIR=$(dirname "$BUILD_FILE")" >> "$GITHUB_ENV"
+          PROJECT_DIR="$(dirname "$BUILD_FILE")"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           echo "Found: $BUILD_FILE"
 
-      - name: Inspect and fix Loom version
+      - name: Force-fix Loom version
         shell: bash
         run: |
           cd "$GITHUB_WORKSPACE/$PROJECT_DIR"
 
-          if [ ! -f build.gradle ]; then
-            echo "ERROR: Expected build.gradle was not found"
-            exit 1
-          fi
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          import sys
 
-          echo "=== Original plugin declaration ==="
-          nl -ba build.gradle | head -n 12
+          path = Path("build.gradle")
+          if not path.exists():
+              path = Path("build.gradle.kts")
 
-          sed -i -E \
-            "/fabric-loom-remap/ s/1\.11(['\"])/1.11.8\1/g" \
-            build.gradle
+          if not path.exists():
+              sys.exit("ERROR: Gradle build file not found")
 
-          echo "=== Updated plugin declaration ==="
-          nl -ba build.gradle | head -n 12
+          text = path.read_text()
+          lines = text.splitlines()
+          found = False
 
-          if grep -E "fabric-loom-remap.*version.*['\"]1\.11['\"]" build.gradle; then
-            echo "ERROR: Loom version is still 1.11"
-            exit 1
-          fi
+          for i, line in enumerate(lines):
+              if "net.fabricmc.fabric-loom-remap" in line:
+                  found = True
+                  lines[i] = re.sub(
+                      r"(?<![\d.])1\.11(?![\d.])",
+                      "1.11.8",
+                      line
+                  )
+                  print(f"Plugin line {i + 1}: {lines[i]}")
+
+          if not found:
+              print("Loom declaration not matched; checking build file:")
+              print(text[:3000])
+              sys.exit(1)
+
+          path.write_text("\n".join(lines) + "\n")
+          PY
 
       - name: Build Nightfall
         shell: bash
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: gradle --no-daemon clean build
+        run: |
+          cd "$GITHUB_WORKSPACE/$PROJECT_DIR"
+          gradle --no-daemon clean build
 
       - name: Upload JAR
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: Nightfall-Client
+          name: nightfall-build
           path: extracted/**/build/libs/*.jar
           if-no-files-found: error
           
