@@ -33,10 +33,10 @@ jobs:
       - name: Check ZIP
         shell: bash
         run: |
-          if [ ! -f nightfall.zip ]; then
-            echo "ERROR: nightfall.zip not found in repository root"
+          test -f nightfall.zip || {
+            echo "ERROR: nightfall.zip not found"
             exit 1
-          fi
+          }
 
       - name: Extract project
         shell: bash
@@ -49,43 +49,37 @@ jobs:
             -print -quit)"
 
           if [ -z "$BUILD_FILE" ]; then
-            echo "ERROR: Gradle build file not found in nightfall.zip"
+            echo "ERROR: build.gradle not found in ZIP"
             exit 1
           fi
 
-          PROJECT_DIR="$(dirname "$BUILD_FILE")"
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "PROJECT_DIR=$(dirname "$BUILD_FILE")" >> "$GITHUB_ENV"
+          echo "Found: $BUILD_FILE"
 
-          echo "Project directory: $PROJECT_DIR"
-          echo "Build file: $BUILD_FILE"
-
-      - name: Fix Fabric Loom version
+      - name: Inspect and fix Loom version
         shell: bash
-        working-directory: extracted
         run: |
           cd "$GITHUB_WORKSPACE/$PROJECT_DIR"
 
-          if [ -f build.gradle ]; then
-            sed -i -E \
-              "/net\.fabricmc\.fabric-loom-remap/ s/1\.11(['\"])/1.11.8\1/g" \
-              build.gradle
-            echo "Updated plugin declaration:"
-            grep -n "fabric-loom-remap" build.gradle || true
-          else
-            echo "ERROR: build.gradle not found"
+          if [ ! -f build.gradle ]; then
+            echo "ERROR: Expected build.gradle was not found"
             exit 1
           fi
 
-      - name: Verify Gradle project
-        shell: bash
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          echo "Java version:"
-          java -version
-          echo "Gradle project:"
-          gradle --version
-          echo "Project files:"
-          ls -la
+          echo "=== Original plugin declaration ==="
+          nl -ba build.gradle | head -n 12
+
+          sed -i -E \
+            "/fabric-loom-remap/ s/1\.11(['\"])/1.11.8\1/g" \
+            build.gradle
+
+          echo "=== Updated plugin declaration ==="
+          nl -ba build.gradle | head -n 12
+
+          if grep -E "fabric-loom-remap.*version.*['\"]1\.11['\"]" build.gradle; then
+            echo "ERROR: Loom version is still 1.11"
+            exit 1
+          fi
 
       - name: Build Nightfall
         shell: bash
