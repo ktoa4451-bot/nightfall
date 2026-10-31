@@ -1,12 +1,12 @@
 
-name: Nightfall Build
+name: Nightfall Client Build
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - "nightfall-with-build-yml.zip"
-      - ".github/workflows/build.yml"
+      - "**"
+      - "!build-log.txt"
 
 permissions:
   contents: read
@@ -34,161 +34,112 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ZIP_FILE="nightfall-with-build-yml.zip"
-          test -f "$ZIP_FILE" || {
-            echo "ERROR: $ZIP_FILE not found in repository root"
-            ls -la
-            exit 1
-          }
 
           mkdir -p source
-          unzip -oq "$ZIP_FILE" -d source
 
-          BUILD_FILE="$(find source -type f -name build.gradle -print -quit)"
-          if [ -z "$BUILD_FILE" ]; then
-            echo "ERROR: build.gradle not found inside ZIP"
-            find source -maxdepth 4 -type f | head -n 100
+          ZIP_FILE="$(find . -maxdepth 2 -type f \
+            -iname 'nightfall-with-build-yml.zip' \
+            -print -quit)"
+
+          if [ -n "$ZIP_FILE" ]; then
+            unzip -oq "$ZIP_FILE" -d source
+          fi
+
+          PROJECT_DIR="$(find source . -type f \
+            \( -name build.gradle -o -name build.gradle.kts \) \
+            -not -path './.git/*' \
+            -not -path './source/source/*' \
+            -print -quit | xargs -r dirname)"
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: Gradle project not found."
+            find . -maxdepth 4 -type f | sort
             exit 1
           fi
 
-          PROJECT_DIR="$(dirname "$BUILD_FILE")"
+          PROJECT_DIR="$(realpath "$PROJECT_DIR")"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
           echo "Project directory: $PROJECT_DIR"
+          ls -la "$PROJECT_DIR"
 
-      - name: Configure Loom version
+      - name: Diagnose Java source files
         shell: bash
         run: |
-          set -euo pipefail
           cd "$PROJECT_DIR"
 
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
+          echo "===== JAVA FILES ====="
+          find src -type f -name "*.java" -print | sort || true
 
-          p = Path("build.gradle")
-          s = p.read_text(encoding="utf-8")
+          echo "===== REQUIRED CLASSES ====="
+          for name in \
+            ClickGUI \
+            HudManager \
+            WorldRenderer \
+            MathUtil \
+            AuraTargets \
+            CrystalMath
+          do
+            echo "--- $name ---"
+            find src -type f -name "$name.java" -print || true
+          done
 
-          pattern = (
-              r"""id\s+['"](?:net\.fabricmc\.fabric-loom-remap|fabric-loom)['"]"""
-              r"""\s+version\s+["'][^"']+["']"""
-          )
+          echo "===== SOURCE SETS ====="
+          find src -maxdepth 2 -type d -print | sort || true
 
-          replacement = "id 'net.fabricmc.fabric-loom-remap' version '1.15.5'"
-          s, count = re.subn(pattern, replacement, s, count=1)
-
-          if count:
-              p.write_text(s, encoding="utf-8")
-              print("Updated Loom plugin to 1.15.5")
-          else:
-              print("Loom declaration not changed; checking existing configuration")
-
-          props = Path("gradle.properties")
-          if props.exists():
-              s = props.read_text(encoding="utf-8")
-              s = re.sub(r"(?m)^loom_version=.*$", "loom_version=1.15.5", s)
-              props.write_text(s, encoding="utf-8")
-
-          # Keep split client source-set configuration intact.
-          print("Source-set configuration preserved.")
-          PY
-
-      - name: Patch Minecraft 1.21.11 API names
+      - name: Build Nightfall
+        id: build
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
           cd "$PROJECT_DIR"
 
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+            BUILD_CMD=(./gradlew)
+          else
+            BUILD_CMD=(gradle)
+          fi
 
-          roots = [Path("src/main/java"), Path("src/client/java")]
-
-          for root in roots:
-              if not root.exists():
-                  continue
-
-              for p in root.rglob("*.java"):
-                  s = p.read_text(encoding="utf-8")
-                  old = s
-
-                  s = s.replace(
-                      "import net.minecraft.resources.ResourceLocation;",
-                      "import net.minecraft.resources.Identifier;"
-                  )
-                  s = s.replace(
-                      "ResourceLocation.fromNamespaceAndPath",
-                      "Identifier.fromNamespaceAndPath"
-                  )
-
-                  if p.name == "ClickGUI.java":
-                      if (
-                          "import net.minecraft.client.input.MouseButtonEvent;" not in s
-                          and "import net.minecraft.client.gui.screens.Screen;" in s
-                      ):
-                          s = s.replace(
-                              "import net.minecraft.client.gui.screens.Screen;",
-                              "import net.minecraft.client.gui.screens.Screen;\n"
-                              "import net.minecraft.client.input.MouseButtonEvent;"
-                          )
-
-                      s = re.sub(
-                          r"public boolean mouseClicked\s*\(\s*double\s+mx\s*,"
-                          r"\s*double\s+my\s*,\s*int\s+button\s*\)\s*\{",
-                          "public boolean mouseClicked(MouseButtonEvent event, "
-                          "boolean doubleClick) {\n"
-                          "        double mx = event.x();\n"
-                          "        double my = event.y();\n"
-                          "        int button = event.button();",
-                          s
-                      )
-                      s = s.replace(
-                          "super.mouseClicked(mx, my, button)",
-                          "super.mouseClicked(event, doubleClick)"
-                      )
-
-                  if s != old:
-                      p.write_text(s, encoding="utf-8")
-                      print("Patched:", p)
-          PY
-
-      - name: Build JAR and print diagnostics
-        shell: bash
-        run: |
           set +e
-          cd "$PROJECT_DIR"
+          "${BUILD_CMD[@]}" clean build --stacktrace \
+            2>&1 | tee "$GITHUB_WORKSPACE/build-log.txt"
+          RESULT=${PIPESTATUS[0]}
+          set -e
 
-          gradle --no-daemon clean build \
-            --stacktrace --console=plain > build.log 2>&1
-
-          RESULT=$?
-
-          echo "========== COMPILER ERRORS =========="
-          grep -n -B 3 -A 5 -E \
-            'error:|What went wrong:|Compilation failed|cannot find symbol|^[^ ]+\.java:[0-9]+:' \
-            build.log | head -n 120 || true
-
-          echo "========== LAST 100 LOG LINES =========="
-          tail -n 100 build.log
-
+          echo "exit_code=$RESULT" >> "$GITHUB_OUTPUT"
           exit "$RESULT"
-
-      - name: Upload JAR
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Nightfall-JAR
-          path: |
-            ${{ env.PROJECT_DIR }}/build/libs/*.jar
-          if-no-files-found: error
-          retention-days: 14
 
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Nightfall-build-log
-          path: ${{ env.PROJECT_DIR }}/build.log
-          if-no-files-found: ignore
+          name: nightfall-build-log
+          path: build-log.txt
+          if-no-files-found: warn
           retention-days: 7
+
+      - name: Upload compiled JAR
+        if: steps.build.outputs.exit_code == '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightfall-client
+          path: |
+            source/**/build/libs/*.jar
+            source/build/libs/*.jar
+            ./**/build/libs/*.jar
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Report build result
+        if: always()
+        shell: bash
+        run: |
+          if [ "${{ steps.build.outputs.exit_code }}" = "0" ]; then
+            echo "BUILD SUCCESSFUL"
+          else
+            echo "BUILD FAILED"
+            echo "Download nightfall-build-log to inspect the errors."
+          fi
           
