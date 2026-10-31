@@ -19,7 +19,7 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      # Для Loom 1.11 нужен Gradle 8.14+
+      # Loom 1.11 требует Gradle 8.14+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -49,7 +49,7 @@ jobs:
           echo "Содержимое build_dir:"
           ls -la build_dir
 
-      - name: Force settings.gradle to root
+      - name: Ensure settings.gradle in root
         run: |
           cd build_dir
           if [ ! -f "settings.gradle" ]; then
