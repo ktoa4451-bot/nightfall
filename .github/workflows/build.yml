@@ -1,12 +1,12 @@
 
-name: Nightfall Build
+name: Nightfall Client Build
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - "nightfall.zip"
-      - ".github/workflows/**"
+      - 'nightfall.zip'
+      - '.github/workflows/build.yml'
 
 permissions:
   contents: read
@@ -19,91 +19,46 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java 21
+      - name: Setup Java 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: '21'
 
-      - name: Set up Gradle
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "9.2.0"
 
       - name: Extract Nightfall
         shell: bash
         run: |
-          test -f nightfall.zip || {
-            echo "ERROR: nightfall.zip not found"
-            exit 1
-          }
-
-          mkdir -p extracted
-          unzip -oq nightfall.zip -d extracted
-
-          BUILD_FILE="$(find extracted -type f \
-            \( -name build.gradle -o -name build.gradle.kts \) \
-            -print -quit)"
-
-          if [ -z "$BUILD_FILE" ]; then
-            echo "ERROR: Gradle build file not found"
-            exit 1
+          if [ -f nightfall.zip ]; then
+            mkdir extracted
+            unzip -q nightfall.zip -d extracted
+          else
+            mkdir extracted
+            cp -r . extracted/
           fi
 
-          PROJECT_DIR="$(dirname "$BUILD_FILE")"
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Found: $BUILD_FILE"
-
-      - name: Force-fix Loom version
+      - name: Find Gradle project
         shell: bash
         run: |
-          cd "$GITHUB_WORKSPACE/$PROJECT_DIR"
-
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-          import sys
-
-          path = Path("build.gradle")
-          if not path.exists():
-              path = Path("build.gradle.kts")
-
-          if not path.exists():
-              sys.exit("ERROR: Gradle build file not found")
-
-          text = path.read_text()
-          lines = text.splitlines()
-          found = False
-
-          for i, line in enumerate(lines):
-              if "net.fabricmc.fabric-loom-remap" in line:
-                  found = True
-                  lines[i] = re.sub(
-                      r"(?<![\d.])1\.11(?![\d.])",
-                      "1.11.8",
-                      line
-                  )
-                  print(f"Plugin line {i + 1}: {lines[i]}")
-
-          if not found:
-              print("Loom declaration not matched; checking build file:")
-              print(text[:3000])
-              sys.exit(1)
-
-          path.write_text("\n".join(lines) + "\n")
-          PY
+          BUILD_FILE=$(find extracted -name build.gradle -type f | head -n 1)
+          if [ -z "$BUILD_FILE" ]; then
+            echo "ERROR: build.gradle not found"
+            exit 1
+          fi
+          echo "PROJECT_DIR=$(dirname "$BUILD_FILE")" >> "$GITHUB_ENV"
 
       - name: Build Nightfall
-        shell: bash
-        run: |
-          cd "$GITHUB_WORKSPACE/$PROJECT_DIR"
-          gradle --no-daemon clean build
+        run: gradle --no-daemon clean build
+        working-directory: ${{ env.PROJECT_DIR }}
 
       - name: Upload JAR
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: nightfall-build
-          path: extracted/**/build/libs/*.jar
+          name: Nightfall-Client
+          path: |
+            ${{ env.PROJECT_DIR }}/build/libs/*.jar
           if-no-files-found: error
           
