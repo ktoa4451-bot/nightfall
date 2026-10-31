@@ -34,14 +34,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -f nightfall.zip
           mkdir -p source
           unzip -oq nightfall.zip -d source
           BUILD_FILE="$(find source -type f -name build.gradle -print -quit)"
           test -n "$BUILD_FILE"
           PROJECT_DIR="$(dirname "$BUILD_FILE")"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
       - name: Fix Loom configuration
         shell: bash
         run: |
@@ -50,7 +48,6 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import re
-
           p = Path("build.gradle")
           s = p.read_text(encoding="utf-8")
           pattern = (
@@ -65,7 +62,6 @@ jobs:
           )
           if not n:
               raise SystemExit("Loom plugin declaration not found")
-
           s = re.sub(
               r"(?m)^\s*splitEnvironmentSourceSets\(\)\s*\n", "", s
           )
@@ -73,7 +69,6 @@ jobs:
               r"(?m)^\s*sourceSet\s+sourceSets\.client\s*\n", "", s
           )
           p.write_text(s, encoding="utf-8")
-
           props = Path("gradle.properties")
           if props.exists():
               t = props.read_text(encoding="utf-8")
@@ -84,7 +79,6 @@ jobs:
               )
               props.write_text(t, encoding="utf-8")
           PY
-
       - name: Patch Minecraft 1.21.11 sources
         shell: bash
         run: |
@@ -93,15 +87,11 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import re
-
           root = Path("src/main/java")
-          if not root.exists():
-              raise SystemExit("src/main/java not found")
-
+          # ResourceLocation is Identifier with Mojang mappings.
           for p in root.rglob("*.java"):
               s = p.read_text(encoding="utf-8")
               old = s
-
               s = s.replace(
                   "import net.minecraft.resources.ResourceLocation;",
                   "import net.minecraft.resources.Identifier;"
@@ -110,7 +100,6 @@ jobs:
                   "ResourceLocation.fromNamespaceAndPath",
                   "Identifier.fromNamespaceAndPath"
               )
-
               if p.name == "ClickGUI.java":
                   if "import net.minecraft.client.input.MouseButtonEvent;" not in s:
                       s = s.replace(
@@ -118,7 +107,6 @@ jobs:
                           "import net.minecraft.client.gui.screens.Screen;\n"
                           "import net.minecraft.client.input.MouseButtonEvent;"
                       )
-
                   s = re.sub(
                       r"public boolean mouseClicked\s*\(\s*double\s+mx\s*,"
                       r"\s*double\s+my\s*,\s*int\s+button\s*\)\s*\{",
@@ -133,7 +121,6 @@ jobs:
                       "super.mouseClicked(mx, my, button)",
                       "super.mouseClicked(event, doubleClick)"
                   )
-
               if p.name == "NightfallClient.java":
                   if "import net.minecraft.resources.Identifier;" not in s:
                       s = s.replace(
@@ -146,19 +133,16 @@ jobs:
                       'KeyMapping.Category.register('
                       'Identifier.fromNamespaceAndPath("nightfall", "main"))'
                   )
-
               if s != old:
                   p.write_text(s, encoding="utf-8")
                   print("Patched:", p)
           PY
-
       - name: Build JAR
         shell: bash
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
           gradle --no-daemon clean build --stacktrace
-
       - name: Upload JAR
         if: success()
         uses: actions/upload-artifact@v4
@@ -178,4 +162,5 @@ jobs:
             source/**/build/tmp/**
           if-no-files-found: ignore
           retention-days: 7
+
           
