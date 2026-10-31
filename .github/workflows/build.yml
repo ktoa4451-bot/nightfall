@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "nightfall.zip"
+      - "**/nightfall.zip"
       - ".github/workflows/build.yml"
 
 permissions:
@@ -30,41 +30,75 @@ jobs:
         with:
           gradle-version: "9.2.0"
 
-      - name: Extract project
+      - name: Find and extract project
         shell: bash
         run: |
           set -euo pipefail
-          test -f nightfall.zip
+
+          ZIP_FILE="$(find . -type f -iname 'nightfall.zip' \
+            -not -path './.git/*' -print -quit)"
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "::error::nightfall.zip not found in repository"
+            echo "Repository files:"
+            find . -maxdepth 5 -type f | head -n 150
+            exit 1
+          fi
+
+          echo "Found ZIP: $ZIP_FILE"
           mkdir -p source
-          unzip -oq nightfall.zip -d source
-          BUILD_FILE="$(find source -type f -name build.gradle -print -quit)"
-          test -n "$BUILD_FILE"
+          unzip -oq "$ZIP_FILE" -d source
+
+          BUILD_FILE="$(find source -type f -name build.gradle \
+            -not -path '*/build/*' -print -quit)"
+
+          if [ -z "$BUILD_FILE" ]; then
+            echo "::error::build.gradle not found inside ZIP"
+            find source -maxdepth 6 -type f | head -n 150
+            exit 1
+          fi
+
           PROJECT_DIR="$(dirname "$BUILD_FILE")"
+
+          if [ ! -f "$PROJECT_DIR/settings.gradle" ] && \
+             [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
+            echo "::error::settings.gradle not found in $PROJECT_DIR"
+            exit 1
+          fi
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Project directory: $PROJECT_DIR"
 
       - name: Fix Loom configuration
         shell: bash
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
+
           python3 - <<'PY'
           from pathlib import Path
           import re
 
           p = Path("build.gradle")
           s = p.read_text(encoding="utf-8")
+
           pattern = (
               r"""id\s+['"](?:net\.fabricmc\.fabric-loom-remap|fabric-loom)['"]"""
               r"""\s+version\s+["'][^"']+["']"""
           )
+
           s, n = re.subn(
               pattern,
               "id 'net.fabricmc.fabric-loom-remap' version '1.15.5'",
               s,
               count=1
           )
+
           if not n:
-              raise SystemExit("Loom plugin declaration not found")
+              if "1.15.5" not in s:
+                  raise SystemExit(
+                      "Loom declaration not recognized; inspect build.gradle"
+                  )
 
           s = re.sub(
               r"(?m)^\s*splitEnvironmentSourceSets\(\)\s*\n", "", s
@@ -72,6 +106,7 @@ jobs:
           s = re.sub(
               r"(?m)^\s*sourceSet\s+sourceSets\.client\s*\n", "", s
           )
+
           p.write_text(s, encoding="utf-8")
 
           props = Path("gradle.properties")
@@ -83,6 +118,8 @@ jobs:
                   t
               )
               props.write_text(t, encoding="utf-8")
+
+          print("Loom configuration checked.")
           PY
 
       - name: Patch Minecraft 1.21.11 sources
@@ -90,11 +127,13 @@ jobs:
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
+
           python3 - <<'PY'
           from pathlib import Path
           import re
 
           root = Path("src/main/java")
+
           if not root.exists():
               raise SystemExit("src/main/java not found")
 
@@ -129,6 +168,7 @@ jobs:
                       "        int button = event.button();",
                       s
                   )
+
                   s = s.replace(
                       "super.mouseClicked(mx, my, button)",
                       "super.mouseClicked(event, doubleClick)"
@@ -141,6 +181,7 @@ jobs:
                           "import net.minecraft.client.KeyMapping;\n"
                           "import net.minecraft.resources.Identifier;"
                       )
+
                   s = s.replace(
                       '"category.nightfall"',
                       'KeyMapping.Category.register('
@@ -150,6 +191,8 @@ jobs:
               if s != old:
                   p.write_text(s, encoding="utf-8")
                   print("Patched:", p)
+
+          print("Source patch step completed.")
           PY
 
       - name: Build JAR
@@ -164,8 +207,20 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Nightfall-JAR
-          path: ${{ env.PROJECT_DIR }}/build/libs/*.jar
+          path: |
+            ${{ env.PROJECT_DIR }}/build/libs/*.jar
+            !${{ env.PROJECT_DIR }}/build/libs/*-sources.jar
+            !${{ env.PROJECT_DIR }}/build/libs/*-dev.jar
           if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload sources
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nightfall-Sources
+          path: ${{ env.PROJECT_DIR }}/build/libs/*-sources.jar
+          if-no-files-found: ignore
           retention-days: 14
 
       - name: Upload diagnostics
