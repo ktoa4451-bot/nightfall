@@ -23,18 +23,43 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - name: Locate Gradle project
-        id: locate
+      - name: Extract project ZIP
+        id: project
         shell: bash
         run: |
-          FILE=$(find . -type f -name build.gradle -not -path '*/build/*' | head -n 1)
-          if [ -z "$FILE" ]; then
-            echo "ERROR: build.gradle not found. Check whether the ZIP was extracted into the repository."
+          set -e
+          mkdir -p "$RUNNER_TEMP/nightfall-project"
+
+          if find . -type f -name build.gradle -not -path '*/build/*' | grep -q .; then
+            echo "Project is already extracted."
+            PROJECT="$(dirname "$(find . -type f -name build.gradle -not -path '*/build/*' | head -n 1)")"
+          else
+            ZIP=""
+            while IFS= read -r file; do
+              if unzip -Z1 "$file" 2>/dev/null | grep -qE '(^|/)build.gradle$'; then
+                ZIP="$file"
+                break
+              fi
+            done < <(find . -type f -iname '*.zip')
+
+            if [ -z "$ZIP" ]; then
+              echo "ERROR: No ZIP containing build.gradle was found."
+              exit 1
+            fi
+
+            echo "Extracting: $ZIP"
+            unzip -oq "$ZIP" -d "$RUNNER_TEMP/nightfall-project"
+
+            PROJECT="$(dirname "$(find "$RUNNER_TEMP/nightfall-project" -type f -name build.gradle | head -n 1)")"
+          fi
+
+          if [ -z "$PROJECT" ] || [ ! -f "$PROJECT/build.gradle" ]; then
+            echo "ERROR: build.gradle not found after extraction."
             exit 1
           fi
-          DIR=$(dirname "$FILE")
-          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
-          echo "Found Gradle project: $DIR"
+
+          echo "Project directory: $PROJECT"
+          echo "dir=$PROJECT" >> "$GITHUB_OUTPUT"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -42,16 +67,13 @@ jobs:
           gradle-version: "9.2.0"
 
       - name: Build Nightfall
-        working-directory: ${{ steps.locate.outputs.dir }}
+        working-directory: ${{ steps.project.outputs.dir }}
         run: gradle --no-daemon clean build --stacktrace
 
       - name: Upload JAR
         uses: actions/upload-artifact@v4
         with:
           name: nightfall-jar
-          path: |
-            **/build/libs/*.jar
-            !**/*-sources.jar
-            !**/*-dev.jar
+          path: ${{ steps.project.outputs.dir }}/build/libs/*.jar
           if-no-files-found: error
           
