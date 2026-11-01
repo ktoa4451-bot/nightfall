@@ -4,7 +4,6 @@ name: Nightfall v6 Build
 on:
   push:
     branches: [main, master]
-  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -24,6 +23,16 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      - name: Install unzip
+        run: sudo apt-get update && sudo apt-get install -y unzip
+
+      - name: Extract Nightfall ZIP
+        run: |
+          mkdir -p extracted
+          unzip -q nightfall-v6.zip -d extracted
+          echo "Extracted files:"
+          find extracted -maxdepth 4 -type f | head -200
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -33,30 +42,30 @@ jobs:
         id: project
         shell: bash
         run: |
-          echo "Repository contents:"
-          ls -la
-
-          FILE=$(find . -maxdepth 5 \
+          FILE=$(find extracted -type f \
             \( -name build.gradle -o -name build.gradle.kts \) \
-            -type f | head -n 1)
+            -print -quit)
 
           if [ -z "$FILE" ]; then
-            echo "ERROR: build.gradle or build.gradle.kts not found"
+            echo "ERROR: No Gradle build file found in ZIP."
+            echo "Check whether the archive contains source code."
             exit 1
           fi
 
           DIR=$(dirname "$FILE")
           echo "dir=$DIR" >> "$GITHUB_OUTPUT"
-          echo "Found Gradle project in: $DIR"
+          echo "Gradle project: $DIR"
 
       - name: Build Nightfall
-        run: gradle -p "${{ steps.project.outputs.dir }}" --no-daemon clean build --stacktrace
+        run: |
+          gradle -p "${{ steps.project.outputs.dir }}" \
+            --no-daemon clean build --stacktrace
 
-      - name: Upload mod JAR
+      - name: Upload Nightfall JAR
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: Nightfall-v6
-          path: '**/build/libs/*.jar'
+          path: extracted/**/build/libs/*.jar
           if-no-files-found: error
           
