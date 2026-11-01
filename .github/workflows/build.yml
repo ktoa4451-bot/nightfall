@@ -1,3 +1,4 @@
+
 name: Nightfall v6 Build
 
 on:
@@ -12,12 +13,10 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: nightfall
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Set up Java 21
         uses: actions/setup-java@v4
@@ -30,24 +29,34 @@ jobs:
         with:
           gradle-version: '9.2.0'
 
-      - name: Run logic tests
+      - name: Find Gradle project
+        id: project
+        shell: bash
         run: |
-          if [ -f tools/run-tests.sh ]; then
-            sh tools/run-tests.sh
-          else
-            echo "No optional logic tests found; skipping."
+          echo "Repository contents:"
+          ls -la
+
+          FILE=$(find . -maxdepth 5 \
+            \( -name build.gradle -o -name build.gradle.kts \) \
+            -type f | head -n 1)
+
+          if [ -z "$FILE" ]; then
+            echo "ERROR: build.gradle or build.gradle.kts not found"
+            exit 1
           fi
 
+          DIR=$(dirname "$FILE")
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+          echo "Found Gradle project in: $DIR"
+
       - name: Build Nightfall
-        run: gradle --no-daemon clean build --stacktrace
+        run: gradle -p "${{ steps.project.outputs.dir }}" --no-daemon clean build --stacktrace
 
       - name: Upload mod JAR
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: Nightfall-v6
-          path: |
-            nightfall/build/libs/*.jar
-            !nightfall/build/libs/*-sources.jar
-            !nightfall/build/libs/*-dev.jar
+          path: '**/build/libs/*.jar'
           if-no-files-found: error
+          
