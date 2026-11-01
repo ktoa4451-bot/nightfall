@@ -26,12 +26,26 @@ jobs:
       - name: Install unzip
         run: sudo apt-get update && sudo apt-get install -y unzip
 
-      - name: Extract Nightfall ZIP
+      - name: Find and extract Nightfall ZIP
+        shell: bash
         run: |
+          set -e
           mkdir -p extracted
-          unzip -q nightfall-v6.zip -d extracted
-          echo "Extracted files:"
-          find extracted -maxdepth 4 -type f | head -200
+
+          ZIP=$(find . -maxdepth 2 -type f -iname '*.zip' \
+            ! -path './.git/*' -print -quit)
+
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: ZIP archive not found in repository root."
+            ls -la
+            exit 1
+          fi
+
+          echo "Extracting: $ZIP"
+          unzip -oq "$ZIP" -d extracted
+
+          echo "Extracted project files:"
+          find extracted -maxdepth 5 -type f | head -200
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -47,14 +61,13 @@ jobs:
             -print -quit)
 
           if [ -z "$FILE" ]; then
-            echo "ERROR: No Gradle build file found in ZIP."
-            echo "Check whether the archive contains source code."
+            echo "ERROR: No Gradle build file found in extracted ZIP."
             exit 1
           fi
 
           DIR=$(dirname "$FILE")
           echo "dir=$DIR" >> "$GITHUB_OUTPUT"
-          echo "Gradle project: $DIR"
+          echo "Found project: $DIR"
 
       - name: Build Nightfall
         run: |
