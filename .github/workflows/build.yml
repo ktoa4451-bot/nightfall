@@ -5,10 +5,10 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'build.gradle'
-      - 'settings.gradle'
-      - 'gradle.properties'
-      - 'src/**'
+      - '**.gradle'
+      - '**.gradle.kts'
+      - '**.properties'
+      - 'nightfall-ghostline/**'
       - '.github/workflows/build.yml'
 
 permissions:
@@ -28,29 +28,37 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      - name: Find Gradle project
+        id: project
+        shell: bash
+        run: |
+          for dir in . nightfall-ghostline; do
+            if [ -f "$dir/settings.gradle" ] || \
+               [ -f "$dir/settings.gradle.kts" ]; then
+              echo "dir=$dir" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "Gradle settings file not found"
+          find . -maxdepth 4 \
+            \( -name settings.gradle -o -name settings.gradle.kts \)
+          exit 1
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '9.2.0'
+          gradle-version: '8.10.2'
 
-      - name: Build Nightfall
+      - name: Build project
+        working-directory: ${{ steps.project.outputs.dir }}
         run: gradle build --no-daemon --stacktrace
-
-      - name: Collect JAR
-        shell: bash
-        run: |
-          mkdir -p output
-          find build/libs -maxdepth 1 -type f -name '*.jar' \
-            ! -name '*-sources.jar' \
-            ! -name '*-dev.jar' \
-            -exec cp {} output/ \;
-          test -n "$(find output -name '*.jar' -print -quit)"
 
       - name: Upload JAR
         uses: actions/upload-artifact@v4
         with:
           name: Nightfall-v10
-          path: output/*.jar
+          path: |
+            ${{ steps.project.outputs.dir }}/build/libs/*.jar
           if-no-files-found: error
           retention-days: 14
           
