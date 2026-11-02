@@ -6,7 +6,7 @@ on:
   push:
     paths:
       - '**'
-      - '!README.md'
+      - '.github/workflows/build.yml'
 
 permissions:
   contents: read
@@ -25,58 +25,69 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Find or extract project
+      - name: Locate or extract project
         id: project
         shell: bash
         run: |
           set -euo pipefail
 
-          find_project() {
+          find_settings() {
             find "$1" -type f \
-              \( -name settings.gradle \
-              -o -name settings.gradle.kts \) \
+              \( -name settings.gradle -o -name settings.gradle.kts \) \
+              -not -path '*/.gradle/*' \
               -print -quit
           }
 
-          SETTINGS="$(find_project . || true)"
+          SETTINGS="$(find_settings . || true)"
 
           if [ -z "$SETTINGS" ]; then
-            mkdir -p extracted
             ZIP="$(find . -type f -name '*.zip' \
-              -not -path './extracted/*' -print -quit)"
+              -not -path '*/.git/*' \
+              -not -path '*/extracted/*' \
+              -print -quit)"
 
-            if [ -n "$ZIP" ]; then
-              unzip -oq "$ZIP" -d extracted
-              SETTINGS="$(find_project extracted || true)"
+            if [ -z "$ZIP" ]; then
+              echo "ERROR: Gradle project or ZIP not found."
+              find . -maxdepth 3 -type f | head -200
+              exit 1
             fi
+
+            mkdir -p extracted
+            unzip -oq "$ZIP" -d extracted
+            SETTINGS="$(find_settings extracted || true)"
           fi
 
           if [ -z "$SETTINGS" ]; then
-            echo "ERROR: Gradle project not found."
-            echo "Repository files:"
-            find . -maxdepth 4 -type f | head -200
+            echo "ERROR: settings.gradle not found."
             exit 1
           fi
 
-          PROJECT_DIR="$(dirname "$SETTINGS")"
+          DIR="$(dirname "$SETTINGS")"
 
-          if [ ! -f "$PROJECT_DIR/build.gradle" ] && \
-             [ ! -f "$PROJECT_DIR/build.gradle.kts" ]; then
-            echo "ERROR: Build file not found in $PROJECT_DIR"
+          if [ ! -f "$DIR/build.gradle" ] && \
+             [ ! -f "$DIR/build.gradle.kts" ]; then
+            echo "ERROR: build.gradle not found in $DIR"
             exit 1
           fi
 
-          echo "dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
-          echo "Found project: $PROJECT_DIR"
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+          echo "Found project: $DIR"
 
-      - name: Set up Gradle
+      - name: Set up Gradle 9.2.0
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.10.2'
+          gradle-version: '9.2.0'
 
       - name: Build Nightfall
         working-directory: ${{ steps.project.outputs.dir }}
         run: gradle build --no-daemon --stacktrace
+
+      - name: Show build outputs
+        if: success()
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: |
+          echo "Generated JAR files:"
+          find build/libs -maxdepth 1 -type f -name '*.jar'
 
       - name: Upload JAR
         uses: actions/upload-artifact@v4
