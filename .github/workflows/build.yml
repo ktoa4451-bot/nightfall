@@ -1,9 +1,27 @@
-name: build
+name: build-and-release
+
+# Берёт ZIP с проектом из репозитория, распаковывает, собирает JAR
+# и выкладывает его в Releases (это и есть "обнова": новый ZIP -> новый релиз).
+# Если ZIP в репозитории нет, ищет build.gradle в репо и собирает оттуда.
 
 on:
   push:
-  pull_request:
+    paths:
+      - '*.zip'
+      - '.github/workflows/build.yml'
   workflow_dispatch:
+    inputs:
+      zip_name:
+        description: 'Имя ZIP в корне репо (пусто = самый новый)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -16,30 +34,71 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      # the project has no gradle wrapper, so Gradle is installed here (Loom 1.14 needs Gradle 9.x)
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 9.2.0
 
-      - name: Logic tests (pure Java, no Minecraft)
-        run: sh tools/run-tests.sh
+      - name: Find and unpack the ZIP
+        id: unpack
+        run: |
+          ZIP="${{ github.event.inputs.zip_name }}"
+          if [ -z "$ZIP" ]; then
+            ZIP=$(ls -1 *.zip 2>/dev/null | sort -V | tail -n 1 || true)
+          fi
+          if [ -n "$ZIP" ] && [ -f "$ZIP" ]; then
+            echo "Unpacking $ZIP"
+            rm -rf _src && mkdir _src
+            unzip -q "$ZIP" -d _src
+            GRADLE=$(find _src -maxdepth 3 -name build.gradle -not -path '*/node_modules/*' | head -n 1)
+            [ -n "$GRADLE" ] || { echo "::error::build.gradle not found inside $ZIP"; exit 1; }
+            PROJECT=$(dirname "$GRADLE")
+            TAG=$(basename "$ZIP" .zip)
+          else
+            echo "No ZIP in repo, looking for build.gradle"
+            GRADLE=$(find . -maxdepth 3 -name build.gradle | head -n 1)
+            [ -n "$GRADLE" ] || { echo "::error::no ZIP and no build.gradle"; exit 1; }
+            PROJECT=$(dirname "$GRADLE")
+            TAG="build-${GITHUB_RUN_NUMBER}"
+          fi
+          echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Project dir: $PROJECT, tag: $TAG"
 
-      - name: Build
-        run: gradle build --stacktrace
+      - name: Logic tests
+        working-directory: ${{ steps.unpack.outputs.project }}
+        run: |
+          if [ -f tools/run-tests.sh ]; then sh tools/run-tests.sh; else echo "no tests, skipping"; fi
 
-      - name: Upload the mod jar
+      - name: Build JAR
+        working-directory: ${{ steps.unpack.outputs.project }}
+        run: gradle build --stacktrace --no-daemon
+
+      - name: Collect JAR
+        id: jar
+        run: |
+          mkdir -p out
+          cp ${{ steps.unpack.outputs.project }}/build/libs/*.jar out/
+          rm -f out/*-sources.jar out/*-dev.jar
+          ls -l out
+          [ -n "$(ls out/*.jar 2>/dev/null)" ] || { echo "::error::no jar produced"; exit 1; }
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: nightfall
-          path: |
-            build/libs/*.jar
-            !build/libs/*-sources.jar
-            !build/libs/*-dev.jar
+          name: ${{ steps.unpack.outputs.tag }}-jar
+          path: out/*.jar
           if-no-files-found: error
 
-      - name: Upload the sources jar
-        uses: actions/upload-artifact@v4
-        with:
-          name: nightfall-sources
-          path: build/libs/*-sources.jar
-          if-no-files-found: ignore
+      - name: Publish release (update)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.unpack.outputs.tag }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" out/*.jar --clobber
+          else
+            gh release create "$TAG" out/*.jar \
+              --title "$TAG" \
+              --notes "Автосборка из $TAG.zip (run #${GITHUB_RUN_NUMBER}, commit ${GITHUB_SHA::7})" \
+              --latest
+          fi
