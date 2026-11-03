@@ -75,9 +75,16 @@ jobs:
         run: |
           if [ -f tools/ghostline-run-tests.sh ]; then bash tools/ghostline-run-tests.sh; else echo "no ghostline tests, skipping"; fi
 
-      - name: Build JAR
+      - name: Build JAR (3 attempts, Maven sometimes fails to answer)
         working-directory: ${{ steps.unpack.outputs.project }}
-        run: gradle build --stacktrace --no-daemon
+        run: |
+          for i in 1 2 3; do
+            if [ "$i" = "1" ]; then EXTRA=""; else EXTRA="--refresh-dependencies"; fi
+            gradle build --stacktrace --no-daemon $EXTRA && exit 0
+            echo "Build failed (attempt $i of 3), waiting 30s"
+            sleep 30
+          done
+          exit 1
 
       - name: Collect JAR
         id: jar
